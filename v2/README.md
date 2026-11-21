@@ -3,14 +3,14 @@
 This is an **automated discovery + rights-gated clipping prototype**. It preserves v1 files. It does NOT download arbitrary YouTube videos, guarantee fair use, or automatically post to YouTube.
 
 ## What it does
-- Daily/manual YouTube metadata discovery and engagement scoring when `YOUTUBE_API_KEY` is configured. Results are in `output/discovery.csv`.
+- Daily/manual public Bing RSS search for YouTube video links without account login or API keys. Results are in `output/discovery.csv`. Search availability is not guaranteed; no verified engagement metrics or viral scoring are available.
 - Reads `sources/approved.json`; only renders entries with a nonempty, explicit rights basis and permission evidence.
 - Downloads only direct HTTPS media files from approved hosts listed in `APPROVED_MEDIA_HOSTS` (GitHub Actions repository variable). This is not a way to bypass source-site access rules.
 - Creates 720x1280 MP4 Shorts with an original English spoken commentary track (offline espeak-ng), title overlay and burned-in commentary caption. Audio is spoken commentary only unless you supply independently licensed music.
 - Produces MP4 files and `output/report.json` as downloadable GitHub Actions artifacts. Human review required before YouTube upload.
 
 ## Configure
-1. In GitHub **Settings → Secrets and variables → Actions**, create secret `YOUTUBE_API_KEY` (optional for discovery).
+1. No YouTube account, Google Cloud project, or API key is required for public RSS discovery.
 2. Create repository **variable** `APPROVED_MEDIA_HOSTS` with comma-separated HTTPS hostnames that you control or have approval to download from (e.g. `github.com,objects.githubusercontent.com` for your own GitHub release assets). Avoid arbitrary file-hosting URLs.
 3. Edit `sources/approved.json` to add an approved source, with written rights evidence. Example:
 
@@ -36,8 +36,8 @@ This is an **automated discovery + rights-gated clipping prototype**. It preserv
 5. After a successful run, click **gta-studio-v2-results** under Artifacts and download the ZIP.
 
 ## Important limitations
-- YouTube API discovery returns metadata and video links, **not permission to download/reuse**.
-- Engagement ranking is heuristic. It does not verify viral moments inside YouTube videos.
+- Public RSS discovery returns only available titles and links, **not permission to download/reuse**. Search engines can return no results or block automated requests.
+- Public RSS search does not provide verified views, likes, comments, engagement ranking, or viral moment detection.
 - Clip start time is supplied by the user. AI visual highlight detection and automatic transcript-driven selection are future work.
 - Voice uses offline English speech synthesis; it is not a natural-sounding premium AI voice.
 - The prototype uses original user-supplied analytical commentary, not AI-written commentary. This avoids fabricated analysis of unseen footage.
