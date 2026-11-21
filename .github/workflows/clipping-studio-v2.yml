@@ -31,7 +31,9 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           APPROVED_MEDIA_HOSTS: ${{ vars.APPROVED_MEDIA_HOSTS }}
           MAKE_CLIPS: ${{ inputs.make_clips || 'true' }}
-        run: python v2/studio.py
+        run: |
+          python v2/studio.py
+          python v2/licensed_discovery.py
       - name: Upload reports and finished Shorts
         if: always()
         uses: actions/upload-artifact@v4
