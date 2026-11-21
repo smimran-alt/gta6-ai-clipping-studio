@@ -1,0 +1,41 @@
+name: GTA Clipping Studio v2
+on:
+  workflow_dispatch:
+    inputs:
+      make_clips:
+        description: "Render rights-approved clips from sources/approved.json"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+  schedule:
+    - cron: "17 15 * * *"
+permissions:
+  contents: read
+jobs:
+  discover-and-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          python -m pip install requests
+      - name: Discover and render
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          MAKE_CLIPS: ${{ inputs.make_clips || 'true' }}
+        run: python v2/studio.py
+      - name: Upload reports and finished Shorts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta-studio-v2-results
+          path: output/
+          if-no-files-found: warn
+          retention-days: 7
