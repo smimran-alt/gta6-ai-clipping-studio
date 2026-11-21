@@ -17,38 +17,59 @@ OUT.mkdir(exist_ok=True)
 MAX_BYTES = 250 * 1024 * 1024
 
 def discover():
-    key = os.getenv("YOUTUBE_API_KEY", "")
-    if not key:
-        (OUT / "discovery_note.txt").write_text("Set GitHub Actions secret YOUTUBE_API_KEY to enable discovery.\n")
-        return
-    found = []
-    for query in ["GTA 6 gameplay", "GTA 6 police chase", "GTA 6 funny moments"]:
-        r = requests.get("https://www.googleapis.com/youtube/v3/search",
-            params={"part": "snippet", "q": query, "type": "video", "maxResults": 10, "order": "date", "key": key}, timeout=20)
-        r.raise_for_status()
-        found += [(x["id"]["videoId"], query, x["snippet"]["title"]) for x in r.json().get("items", [])]
-    unique = {vid: (query, title) for vid, query, title in found}
-    ids = list(unique)
-    stats = {}
-    for start in range(0, len(ids), 50):
-        r = requests.get("https://www.googleapis.com/youtube/v3/videos",
-            params={"part": "statistics", "id": ",".join(ids[start:start + 50]), "key": key}, timeout=20)
-        r.raise_for_status()
-        stats.update({v["id"]: v.get("statistics", {}) for v in r.json().get("items", [])})
+    """Public, unauthenticated RSS discovery. Never downloads discovered videos."""
+    import html
+    import xml.etree.ElementTree as ET
+    from urllib.parse import parse_qs, unquote
+    from datetime import datetime, timezone
+    queries = ["GTA 6 gameplay", "GTA 6 police chase", "GTA 6 funny moments"]
     rows = []
-    for vid, (query, title) in unique.items():
-        s = stats.get(vid, {})
-        views, likes, comments = (int(s.get(k, 0)) for k in ("viewCount", "likeCount", "commentCount"))
-        engagement = (likes + comments) / max(views, 1)
-        score = min(100, round(25 * min(views / 100000, 1) + 75 * min(engagement / .08, 1)))
-        rows.append({"title": title, "query": query, "url": "https://www.youtube.com/watch?v=" + vid,
-                     "views": views, "likes": likes, "comments": comments, "engagement": round(engagement, 4), "score": score,
-                     "reuse_rights": "NOT VERIFIED - DISCOVERY ONLY"})
-    rows.sort(key=lambda x: x["score"], reverse=True)
+    seen = set()
+    errors = []
+    for query in queries:
+        try:
+            # Public Bing RSS results; availability and coverage are not guaranteed.
+            response = requests.get(
+                "https://www.bing.com/search",
+                params={"q": 'site:youtube.com/watch "' + query + '"', "format": "rss"},
+                headers={"User-Agent": "GTA-Clipping-Studio/2.0 (public RSS discovery)"},
+                timeout=20,
+            )
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            for item in root.findall(".//item"):
+                title = html.unescape(item.findtext("title", default="")).strip()
+                link = html.unescape(item.findtext("link", default="")).strip()
+                parsed = urlparse(link)
+                if parsed.hostname not in {"youtube.com", "www.youtube.com", "m.youtube.com"} or parsed.path != "/watch":
+                    continue
+                vid = parse_qs(parsed.query).get("v", [""])[0]
+                if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) or vid in seen:
+                    continue
+                seen.add(vid)
+                rows.append({
+                    "title": title, "query": query,
+                    "url": "https://www.youtube.com/watch?v=" + vid,
+                    "views": "", "likes": "", "comments": "",
+                    "engagement": "", "score": "",
+                    "reuse_rights": "NOT VERIFIED - DISCOVERY ONLY",
+                })
+        except Exception as exc:
+            errors.append(query + ": " + str(exc))
     with (OUT / "discovery.csv").open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["title", "query", "url", "views", "likes", "comments", "engagement", "score", "reuse_rights"])
+        fields = ["title", "query", "url", "views", "likes", "comments",
+                  "engagement", "score", "reuse_rights"]
+        writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+    (OUT / "discovery_note.txt").write_text(
+        "Public RSS search; no login or API key. Results are not guaranteed.\n"
+        + "No verified views, likes, comments, or viral scores are available.\n"
+        + "Discovered links are not approved for download or reuse.\n"
+        + f"Found {len(rows)} unique YouTube links.\n"
+        + ("Search errors: " + "; ".join(errors) if errors else ""),
+        encoding="utf-8",
+    )
 
 def download(url, dest):
     parsed = urlparse(url)
