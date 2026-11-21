@@ -1,0 +1,4 @@
+{
+  "sources": [],
+  "_instructions": "Add ONLY your own footage or footage with explicit reuse rights. See v2/README.md. Each source requires title, url (direct downloadable HTTPS MP4), rights_basis, permission_evidence, start_seconds, duration_seconds, commentary, and optional licensed_music_url with music_permission_evidence. No YouTube page links as downloadable sources."
+}
