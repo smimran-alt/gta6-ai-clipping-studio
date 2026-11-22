@@ -123,6 +123,22 @@ if rows:
     selected=st.selectbox("Choose video",list(range(len(rows))),
                           format_func=lambda i:rows[i]["title"][:105])
     url=rows[selected]["url"]
+    st.markdown("#### Preview selected video")
+    st.video(url)
+    st.link_button("Open video on YouTube",url)
+    if st.button("Check selected video's availability"):
+        with st.spinner("Checking YouTube..."):
+            try:
+                with yt_dlp.YoutubeDL({"quiet":True,"no_warnings":True,"skip_download":True,
+                                       "noplaylist":True,"socket_timeout":15}) as ydl:
+                    detail=ydl.extract_info(url,download=False)
+                availability=(detail or {}).get("availability","public")
+                if availability in ("private","premium_only","subscriber_only","needs_auth"):
+                    st.error(f"Video is restricted: {availability}. Choose another video.")
+                else:
+                    st.success("Metadata is accessible. Play the preview to confirm the video actually works; downloads can still be blocked.")
+            except Exception as exc:
+                st.error(f"Video could not be verified: {exc}. Choose another result.")
 else:
     url=st.text_input("Or paste a direct video URL (only footage you can lawfully use)")
 st.subheader("3. Generate clips")
