@@ -711,9 +711,13 @@ else:
                         count=rights_pipeline.subtitles_for_segment(source,subtitle_path)
                         if count==0:subtitle_path=None
                     voice_path=None
-                    if voice and narration_mode!="None":
+                    if narration_mode!="None":
                         script=editor.commentary(scene_notes,"",ai_key if narration_mode.startswith("Generate with OpenAI") else None)
-                        voice_path=editor.synthesize(script,folder/f"narration_{i:02d}.wav")
+                        script_path=folder/f"commentary_{i:02d}.txt"
+                        script_path.write_text(script,encoding="utf-8")
+                        entry["commentary_script"]=str(script_path)
+                        if voice:
+                            voice_path=editor.synthesize(script,folder/f"narration_{i:02d}.wav")
                     output=folder/f"short_{i:02d}.mp4"
                     rights_pipeline.render(source,output,look=look,licensed_music=music_path,
                                            voice=voice_path,srt=subtitle_path,fade=fade,vertical=vertical)
@@ -727,7 +731,10 @@ else:
             if successes:
                 bundle=folder/"produced_shorts.zip"
                 with zipfile.ZipFile(bundle,"w",compression=zipfile.ZIP_DEFLATED) as archive:
-                    for item in successes:archive.write(item["file"],arcname=Path(item["file"]).name)
+                    for item in successes:
+                        archive.write(item["file"],arcname=Path(item["file"]).name)
+                        if item.get("commentary_script"):
+                            archive.write(item["commentary_script"],arcname=Path(item["commentary_script"]).name)
                     archive.writestr("production_report.json",json.dumps(produced,indent=2))
                 st.session_state["produced_short_zip"]=str(bundle)
                 st.success(f"Produced {len(successes)} separate MP4 files out of {len(batch_files)} available sources.")
