@@ -23,6 +23,7 @@ import highlights
 import editor
 import engagement
 import comment_download
+import watermark_edit
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -181,7 +182,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.8.3"
+APP_VERSION="v1.8.4"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -297,10 +298,22 @@ if rows:
                 else:
                     st.dataframe([{"start":f"{m['start']//3600:02d}:{(m['start']//60)%60:02d}:{m['start']%60:02d}",
                                    "end":f"{m['end']//3600:02d}:{(m['end']//60)%60:02d}:{m['end']%60:02d}",
-                                   "sampled_timestamp_mentions":m["timestamped_comments"]} for m in moments],
+                                   "sampled_timestamp_mentions":m["timestamped_comments"],
+                                   "reason_for_selection":("Most timestamp mentions in sampled comments" if m["timestamped_comments"]==max(item["timestamped_comments"] for item in moments) else
+                                       f"Ranked by {m['timestamped_comments']} sampled timestamp mention(s)")} for m in moments],
                                  hide_index=True,use_container_width=True)
                     st.markdown("#### Automatically download recommended clips")
                     st.caption("Downloads all recommended 30-second intervals from this selected video, without choosing them one by one. Only use footage you are authorized to download and reuse.")
+                    st.markdown("##### Optional watermark-area blur (authorized footage only)")
+                    blur_requested=st.checkbox("Blur a selected logo/watermark area after download (keep originals)",value=False,key="blur_requested_"+url)
+                    if blur_requested:
+                        st.caption("Select an approximate rectangular region in percent of the frame. This hides pixels but cannot recover the image underneath. Respect source attribution and usage rights.")
+                        blur_x=st.slider("Region left (%)",0,95,80,key="blur_x_"+url)
+                        blur_y=st.slider("Region top (%)",0,95,2,key="blur_y_"+url)
+                        blur_w=st.slider("Region width (%)",2,100-blur_x, min(18,100-blur_x),key="blur_w_"+url)
+                        blur_h=st.slider("Region height (%)",2,100-blur_y,min(14,100-blur_y),key="blur_h_"+url)
+                    else:
+                        blur_x,blur_y,blur_w,blur_h=80,2,18,14
                     batch_rights=st.checkbox("I have permission to download and reuse this video",key="batch_rights_"+url)
                     if st.button("Download all recommended 30-second clips",disabled=not batch_rights,
                                  type="primary",key="batch_download_"+url):
@@ -311,13 +324,24 @@ if rows:
                         st.session_state["batch_results_by_url"]=st.session_state.get("batch_results_by_url",{})
                         st.session_state["batch_results_by_url"][url]=batch_results
                         completed=[item for item in batch_results if item["status"]=="saved"]
+                        if completed and blur_requested:
+                            for item in completed:
+                                original=Path(item["file"])
+                                blurred=original.with_name(original.stem+"_blurred.mp4")
+                                try:
+                                    watermark_edit.blur_region(original,blurred,blur_x,blur_y,blur_w,blur_h)
+                                    item["edited_file"]=str(blurred)
+                                except Exception as exc:
+                                    item["edit_error"]=str(exc)[:250]
+                            if any(item.get("edit_error") for item in completed):
+                                st.warning("Some blur edits failed. Originals were preserved; see the status table.")
                         if completed:
                             from urllib.parse import parse_qs,urlparse
                             video_id=parse_qs(urlparse(url).query).get("v",["selected_video"])[0]
                             zip_path=OUT/"most_discussed"/f"recommended_clips_{video_id}.zip"
                             with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
                                 for item in completed:
-                                    archive.write(item["file"],arcname=Path(item["file"]).name)
+                                    archive.write(item.get("edited_file",item["file"]),arcname=Path(item.get("edited_file",item["file"])).name)
                                 archive.writestr("download_status.json",json.dumps(batch_results,indent=2))
                             st.session_state["batch_zip_by_url"]=st.session_state.get("batch_zip_by_url",{})
                             st.session_state["batch_zip_by_url"][url]=str(zip_path)
