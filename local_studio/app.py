@@ -184,7 +184,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.1"
+APP_VERSION="v1.9.2"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -512,8 +512,8 @@ if sources:
                                key="source_"+src.suffix)
 
 st.divider()
-st.subheader("6. Automatic 30-second highlight recommendations")
-st.caption("Analyzes local video files only. Detects scene changes and soundtrack energy, not specific gameplay events. Results are suggestions, not guaranteed viral moments.")
+st.subheader("6. Viral Clip Score — 12 weighted selection criteria")
+st.caption("Uses your 100-point rubric. Current automatic assessment measures only proxies for hooks, intensity, pacing, audio and duration. Surprise, emotion, storytelling, visuals, trends, replay and sharing are explicitly unassessed, not invented.")
 st.info("For meaningful recommendations, use a source longer than 30 seconds. A 30-second downloaded segment only has one possible 30-second highlight.")
 uploaded=st.file_uploader("Optional: add a local video you have permission to edit",type=["mp4","mkv","webm","mov"],key="highlight_upload")
 if uploaded is not None and st.button("Save uploaded video for analysis"):
@@ -548,16 +548,30 @@ else:
 report=st.session_state.get("highlight_report")
 if report and Path(report["source"]).exists():
     st.caption(f"Source: {Path(report['source']).name} | Method: {report['method']} | {report['audio_status']}")
-    st.caption("Scores reflect motion/cuts and loudness only; they do not identify explosions, police chases or actual viewer engagement.")
+    st.caption("The displayed score is normalized to criteria that can be estimated from available signals, NOT a verified viral score out of 100. The coverage column shows how many of the 100 rubric points were assessed.")
     recs=report["recommendations"]
     if recs:
         st.dataframe([{"rank":i+1,"start_seconds":item["start"],"end_seconds":item["end"],
-                       "highlight_score":item["score"],"scene_changes":item["scene_changes"],
+                       "proxy_score_percent":item["score"],"rubric_coverage_points":item["observed_max_points"],
+                       "observed_points":item["observed_points"],"scene_changes":item["scene_changes"],
                        "audio_level":item["average_audio"]} for i,item in enumerate(recs)],
                      use_container_width=True,hide_index=True)
+        with st.expander("How the 12-criterion scoring works"):
+            st.dataframe([{"criterion":key.replace("_"," ").title(),
+                           "weight":weight,
+                           "assessment":method}
+                          for key,weight,method in highlights.CRITERIA],
+                         hide_index=True,use_container_width=True)
+            st.caption("Proxy means measured scene/audio signals are used as a rough substitute. Unassessed means no reliable automatic estimate is available. These results are not a prediction of views.")
         rank=st.selectbox("Select recommended highlight",list(range(len(recs))),
                           format_func=lambda i:f"#{i+1} — {recs[i]['start']}s to {recs[i]['end']}s | Score {recs[i]['score']}")
         chosen=recs[rank]
+        st.dataframe([{"criterion":key.replace("_"," ").title(),
+                       "max_points":value["max_points"],
+                       "estimated_points":value["estimated_points"],
+                       "assessment":value["evidence"]}
+                      for key,value in chosen["score_breakdown"].items()],
+                     hide_index=True,use_container_width=True)
         st.caption(f"Selected time: {int(chosen['start'])//60:02d}:{int(chosen['start'])%60:02d}–{int(chosen['end'])//60:02d}:{int(chosen['end'])%60:02d}")
         st.video(str(report["source"]),start_time=int(chosen["start"]))
         make_vertical=st.checkbox("Export recommended highlight as vertical 9:16",value=True,key="highlight_vertical")
