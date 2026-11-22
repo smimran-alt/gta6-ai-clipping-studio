@@ -184,7 +184,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.0"
+APP_VERSION="v1.9.1"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -298,11 +298,22 @@ if rows:
                 if not moments:
                     st.info("No timestamped comments found in the accessible sample. Try section 6 for scene/audio highlights.")
                 else:
+                    batch_quality=st.selectbox("Recommended clips download quality",
+                                                ["360p","480p","720p","1080p","1440p (2K)","2160p (4K)"],
+                                                index=2,key="batch_quality_"+url)
+                    batch_height=int(batch_quality.split("p")[0])
+                    batch_max_mb=st.number_input("Maximum size per downloaded segment (MB)",
+                                                  min_value=50,max_value=2000,value=500,step=50,
+                                                  key="batch_max_mb_"+url)
+                    st.caption("Approximate file sizes are estimates for 30-second MP4 clips, not measured sizes. Actual size depends on source bitrate, encoding, motion and available formats. 4K is available only when the source offers it; exporting to 4K cannot add missing detail.")
+                    estimated_mbps={360:1.0,480:1.8,720:3.5,1080:6.0,1440:12.0,2160:25.0}[batch_height]
                     st.dataframe([{"start":f"{m['start']//3600:02d}:{(m['start']//60)%60:02d}:{m['start']%60:02d}",
                                    "end":f"{m['end']//3600:02d}:{(m['end']//60)%60:02d}:{m['end']%60:02d}",
+                                   "total_seconds":int(m["end"]-m["start"]),
                                    "sampled_timestamp_mentions":m["timestamped_comments"],
-                                   "reason_for_selection":("Most timestamp mentions in sampled comments" if m["timestamped_comments"]==max(item["timestamped_comments"] for item in moments) else
-                                       f"Ranked by {m['timestamped_comments']} sampled timestamp mention(s)")} for m in moments],
+                                   "reason_for_selection":("Highest number of timestamp mentions in sampled comments" if m["timestamped_comments"]==max(item["timestamped_comments"] for item in moments) else
+                                       f"Ranked by {m['timestamped_comments']} sampled timestamp mention(s)"),
+                                   "approx_size_MB":round((m["end"]-m["start"])*estimated_mbps/8*1.05,1)} for m in moments],
                                  hide_index=True,use_container_width=True)
                     st.markdown("#### Automatically download recommended clips")
                     st.caption("Downloads all recommended 30-second intervals from this selected video, without choosing them one by one. Only use footage you are authorized to download and reuse.")
@@ -326,7 +337,7 @@ if rows:
                         batch_dir=OUT/"most_discussed"/"batch"
                         batch_dir.mkdir(parents=True,exist_ok=True)
                         with st.spinner(f"Downloading and verifying {len(moments)} separate clips..."):
-                            batch_results=comment_download.download_batch(url,moments,batch_dir)
+                            batch_results=comment_download.download_batch(url,moments,batch_dir,quality=batch_height,max_mb=batch_max_mb)
                         st.session_state["batch_results_by_url"]=st.session_state.get("batch_results_by_url",{})
                         st.session_state["batch_results_by_url"][url]=batch_results
                         completed=[item for item in batch_results if item["status"]=="saved"]
@@ -417,7 +428,7 @@ if segment_mode:
     minutes=1
 narration=st.checkbox("Add English computer voice commentary",value=True)
 vertical=st.checkbox("Create vertical 9:16 Shorts",value=True)
-quality=st.selectbox("Maximum download resolution",["360p","480p","720p"],index=1)
+quality=st.selectbox("Maximum download resolution",["360p","480p","720p","1080p","1440p","2160p"],index=2)
 size_mb=st.number_input("Maximum source download size (MB)",min_value=50,max_value=2000,value=500,step=50)
 st.caption("The size limit applies to the entire selected source, not just one 60-second clip. Long videos may exceed the limit even at low resolution.")
 if st.button("4. Download source and create MP4 clips",disabled=not rights or not url):
