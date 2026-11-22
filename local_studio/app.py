@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import streamlit as st
 import yt_dlp
+import discovery
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -176,10 +177,10 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.4.0"
+APP_VERSION="v1.5.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
-st.caption("Preview, select a 30-second segment, preserve the source, validate MP4 exports, and download results.")
+st.caption("Discover GTA 6 videos across YouTube, Twitch, Vimeo, Dailymotion and Internet Archive; preview where supported, verify source links, and clip authorized footage.")
 st.info(f"Output folder: {OUT}")
 if st.button("Open output folder on this computer"):
     try:
@@ -196,8 +197,12 @@ limit=st.slider("Search results",5,30,12)
 if st.button("1. Find GTA 6 videos",type="primary"):
     with st.spinner("Searching public video listings..."):
         try:
-            st.session_state["results"]=search_platform(query,limit,platform)
-            st.success(f"Found {len(st.session_state['results'])} GTA VI-titled videos")
+            found,errors=discovery.discover(query,limit,platform)
+            st.session_state["results"]=found
+            st.session_state["discovery_errors"]=errors
+            st.success(f"Found {len(found)} unique GTA VI-titled video results across selected sources.")
+            if errors:
+                st.warning("Some sources could not be searched: "+", ".join(f"{k}: {v}" for k,v in errors.items()))
         except Exception as exc: st.error(f"Search unavailable: {exc}")
 rows=st.session_state.get("results",[])
 if rows:
@@ -210,33 +215,44 @@ if rows:
             st.session_state["results"]=enrich(rows)
             rows=st.session_state["results"]
     st.dataframe([{"platform":r.get("platform","YouTube"),"title":r["title"],"comments":r["comments"],"views":r["views"],
-                   "duration_seconds":r["duration"],"Watch video":r["url"],"url":r["url"]} for r in rows],
-                 column_config={"Watch video":st.column_config.LinkColumn("Watch video",display_text="▶ Watch video",help="Open this video directly on YouTube"),
+                   "duration_seconds":r["duration"],"availability":r.get("availability","Unverified"),"Watch video":r["url"],"url":r["url"]} for r in rows],
+                 column_config={"Watch video":st.column_config.LinkColumn("Watch video",display_text="▶ Watch video",help="Open this video on its source website"),
                                 "url":st.column_config.TextColumn("url")},
                  use_container_width=True,hide_index=True)
     selected=st.selectbox("Choose video",list(range(len(rows))),
                           format_func=lambda i:rows[i]["title"][:105])
     url=rows[selected]["url"]
     st.markdown("#### Preview selected video")
-    if rows[selected].get("platform","YouTube")=="YouTube":
-        st.video(url)
-        st.caption("Preview is streamed from the source; use the start-time slider below to choose a segment.")
+    selected_platform=rows[selected].get("platform","YouTube")
+    st.caption(f"Source: {selected_platform} | Preview availability depends on the host. A search result is not proof that the video is playable.")
+    embed=discovery.embed_url(url,selected_platform)
+    if embed:
+        try:
+            st.video(embed)
+        except Exception:
+            st.info("Inline preview unavailable for this host. Use the source link below.")
     else:
-        st.info("Preview may be restricted on this platform. Open the source website.")
-    st.link_button("Open video on source website",url)
+        st.info("This source does not provide a reliable in-app preview. Open its video page directly.")
+    st.link_button("▶ Watch video on "+selected_platform,url)
     if st.button("Check selected video's availability"):
-        with st.spinner("Checking YouTube..."):
+        with st.spinner("Checking public metadata..."):
             try:
-                with yt_dlp.YoutubeDL({"quiet":True,"no_warnings":True,"skip_download":True,
-                                       "noplaylist":True,"socket_timeout":15}) as ydl:
-                    detail=ydl.extract_info(url,download=False)
-                availability=(detail or {}).get("availability","public")
-                if availability in ("private","premium_only","subscriber_only","needs_auth"):
-                    st.error(f"Video is restricted: {availability}. Choose another video.")
+                result=discovery.check_video(url)
+                if result.get("playable") is False:
+                    st.error(result["status"])
                 else:
-                    st.success("Metadata is accessible. Play the preview to confirm the video actually works; downloads can still be blocked.")
+                    st.success(result["status"])
+                    st.caption("Confirm playback on the source website. A successful metadata check does not guarantee a downloadable video.")
+                    if result.get("duration"):
+                        rows[selected]["duration"]=result["duration"]
+                    if result.get("views") is not None:
+                        rows[selected]["views"]=result["views"]
+                    if result.get("comments") is not None:
+                        rows[selected]["comments"]=result["comments"]
+                    st.session_state["results"]=rows
             except Exception as exc:
-                st.error(f"Video could not be verified: {exc}. Choose another result.")
+                st.error(f"Metadata check failed: {exc}")
+
 else:
     url=st.text_input("Or paste a direct video URL (only footage you can lawfully use)")
 st.subheader("3. Generate clips")
@@ -316,7 +332,7 @@ if st.session_state.get("zip_path") and Path(st.session_state["zip_path"]).exist
     with open(st.session_state["zip_path"],"rb") as f:
         st.download_button("Download all GTA 6 clips (ZIP)",data=f,
                            file_name="gta6_shorts.zip",mime="application/zip")
-st.caption("Non-YouTube discovery uses public web search; availability is not guaranteed. Search metadata can be incomplete; downloads may be blocked. Voice commentary is generic and not based on AI visual understanding.")
+st.caption("Search uses public listings; platforms may block previews or metadata. Only download footage you are authorized to reuse. Voice commentary is generic, not scene-aware.")
 
 st.divider()
 st.subheader("5. Preview and download saved files")
