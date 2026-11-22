@@ -57,34 +57,80 @@ def audio_energy(source, seconds):
         levels.append(math.sqrt(sq/max(count,1))/32768)
     return levels
 
+CRITERIA=[
+    ("first_2_second_hook",15,"proxy"),
+    ("action_intensity",15,"proxy"),
+    ("surprise_unexpected_event",12,"unassessed"),
+    ("audience_retention_potential",12,"proxy"),
+    ("emotional_reaction",10,"unassessed"),
+    ("storytelling",8,"unassessed"),
+    ("visual_quality",7,"unassessed"),
+    ("trending_topic_relevance",6,"unassessed"),
+    ("replay_potential",5,"unassessed"),
+    ("comment_share_potential",4,"unassessed"),
+    ("audio_excitement",3,"proxy"),
+    ("clip_duration_editability",3,"proxy"),
+]
+assert sum(weight for _,weight,_ in CRITERIA)==100
+
 def rank_windows(duration, scenes, levels, count=5, clip_seconds=CLIP_SECONDS, step=STEP_SECONDS):
+    """Use weighted observable proxies, leaving semantic categories unassessed.
+    Never invent scores for gameplay events or audience emotions.
+    """
     usable=min(float(duration),float(MAX_ANALYSIS_SECONDS))
-    if usable<clip_seconds:
-        return []
+    if usable<clip_seconds:return []
     starts=list(range(0,int(usable-clip_seconds)+1,step))
     final=int(usable-clip_seconds)
-    if final not in starts: starts.append(final)
+    if final not in starts:starts.append(final)
     candidates=[]
     for start in starts:
         end=start+clip_seconds
         changes=sum(start<=t<end for t in scenes)
+        first_changes=sum(start<=t<start+2 for t in scenes)
         energy=levels[int(start):min(len(levels),int(end))]
+        first_energy=levels[int(start):min(len(levels),int(start+2))]
         avg=sum(energy)/len(energy) if energy else 0
         peak=max(energy) if energy else 0
-        # Loudness and cut frequency are heuristics, not popularity predictions.
-        visual=min(changes/8,1)
-        audio=min(avg/0.16,1)
-        burst=min(peak/0.30,1)
-        score=round(100*(0.55*visual+0.30*audio+0.15*burst),1)
+        hook_audio=max(first_energy) if first_energy else 0
+        # Fast cuts and loudness are measurable but are not proof of action or surprise.
+        action=min(changes/9,1)
+        loudness=min(peak/.30,1) if energy else 0
+        hook=min(1,.65*min(first_changes/2,1)+.35*min(hook_audio/.22,1))
+        # Pacing proxy: distribute scene changes over thirds; not a retention prediction.
+        thirds=[sum(start+i*10<=t<start+(i+1)*10 for t in scenes) for i in range(3)]
+        pacing=min(sum(1 for n in thirds if n>0)/3,1)
+        evidence={
+            "first_2_second_hook":hook,
+            "action_intensity":action,
+            "audience_retention_potential":pacing,
+            "audio_excitement":loudness if energy else None,
+            "clip_duration_editability":1.0,
+        }
+        breakdown={}
+        assessed=0
+        possible=0
+        for key,weight,method in CRITERIA:
+            signal=evidence.get(key)
+            value=round(weight*signal,2) if signal is not None else None
+            breakdown[key]={"max_points":weight,"estimated_points":value,
+                            "evidence":("observable proxy, not semantic recognition" if value is not None else "not assessed")}
+            if value is not None:
+                assessed+=value
+                possible+=weight
+        score=round(100*assessed/possible,1) if possible else 0
         candidates.append({"start":start,"end":end,"score":score,
+                           "observed_points":round(assessed,1),
+                           "observed_max_points":possible,
+                           "coverage_percent":round(possible,1),
+                           "score_breakdown":breakdown,
                            "scene_changes":changes,"average_audio":round(avg,4),
                            "peak_audio":round(peak,4)})
-    candidates.sort(key=lambda item:(-item["score"],item["start"]))
+    candidates.sort(key=lambda item:(-item["score"],-item["observed_points"],item["start"]))
     selected=[]
     for item in candidates:
         if all(abs(item["start"]-other["start"])>=clip_seconds for other in selected):
             selected.append(item)
-            if len(selected)>=count: break
+            if len(selected)>=count:break
     return selected
 
 def analyze(source, count=5):
@@ -105,8 +151,8 @@ def analyze(source, count=5):
     results=rank_windows(analyzed,scenes,levels,count=count)
     return {"source":str(source),"source_duration":duration,
             "analyzed_seconds":analyzed,"clip_seconds":CLIP_SECONDS,
-            "method":"scene changes and audio loudness heuristics",
-            "limitations":"Not semantic event detection; scores do not predict virality",
+            "method":"100-point user rubric; observable proxy estimates only; unassessed semantic criteria remain null",
+            "limitations":"Score is normalized to assessable criteria only, NOT a verified 100-point viral score. Semantic criteria require further analysis and remain unassessed.",
             "audio_status":audio_note,"recommendations":results}
 
 def export_clip(source, start, destination, vertical=True):
