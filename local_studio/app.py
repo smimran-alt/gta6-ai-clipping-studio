@@ -19,7 +19,7 @@ OUT=ROOT/"local_output"
 OUT.mkdir(exist_ok=True)
 
 def is_gta6(text):
-    return bool(re.search(r"(?i)(\\bgta\\s*(?:6|vi)\\b|grand theft auto\\s*(?:6|vi)\\b)",text or ""))
+    return bool(re.search(r"(?i)(\bgta\s*(?:6|vi)\b|grand theft auto\s*(?:6|vi)\b)",text or ""))
 
 def search(query,limit):
     with yt_dlp.YoutubeDL({"quiet":True,"no_warnings":True,"extract_flat":"in_playlist",
