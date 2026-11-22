@@ -1,0 +1,29 @@
+name: GTA Clipping Studio v1.8.0 Validation
+on:
+  push:
+    branches: [release/v1.8.0]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install base dependencies
+        run: pip install -r local_studio/requirements.txt
+      - name: Compile application modules
+        run: python -m py_compile local_studio/app.py local_studio/discovery.py local_studio/highlights.py local_studio/editor.py local_studio/engagement.py local_studio/comment_download.py
+      - name: Test timestamped comment scoring
+        run: |
+          PYTHONPATH=local_studio python - <<'PY'
+          import engagement
+          assert engagement.timestamps("Wow 1:23 and 01:02:15!",4000)==[83,3735]
+          assert engagement.timestamps("Nothing happened",100)==[]
+          comments=[{"text":"Watch 02:14 and 2:16!"},{"text":"02:19!"},{"text":"0:31"}]
+          moments=engagement.rank_moments(comments,300)
+          assert moments[0]["start"]==120 and moments[0]["timestamped_comments"]==2,moments
+          assert engagement.rank_moments([],300)==[]
+          print("PASS timestamped comments and ranked 30s windows")
+          PY
