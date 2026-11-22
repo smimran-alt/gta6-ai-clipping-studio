@@ -1,4 +1,4 @@
-name: GTA Clipping Studio v3 - MP4 Shorts
+name: GTA Clipping Studio v3.1 - Archive MP4 Shorts
 on:
   workflow_dispatch:
   schedule:
@@ -19,13 +19,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
           python -m pip install --upgrade requests yt-dlp
-      - name: Find GTA videos and rank by public comments
-        run: |
-          python v2/studio.py
-          python v2/rank_comments.py
-        env:
-          MAKE_CLIPS: "false"
-      - name: Download GTA gameplay and create narrated 60-second MP4 clips
+      - name: Find Internet Archive GTA gameplay MP4 and render narrated 60-second clips
         env:
           V3_MAX_MINUTES: "30"
         run: python v3/auto_clips.py
@@ -37,6 +31,5 @@ jobs:
           path: |
             output/v3_clips/
             output/v3_report.json
-            output/ranked_by_comments.csv
           if-no-files-found: warn
           retention-days: 7
