@@ -144,7 +144,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.3"
+APP_VERSION="v1.3.4"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, preview them, and select a 30-second segment without downloading the full source where supported.")
@@ -228,7 +228,7 @@ if st.button("4. Download source and create MP4 clips",disabled=not rights or no
                          "outtmpl":template,"noplaylist":True,
                          "max_filesize":max_bytes}
                 if segment_mode:
-                    options["download_ranges"]=lambda info,ydl: [(float(start_second),float(start_second)+30.0)]
+                    options["download_ranges"]=yt_dlp.utils.download_range_func(None, [(float(start_second),float(start_second)+30.0)])
                     options["force_keyframes_at_cuts"]=True
                     options["external_downloader"]="ffmpeg"
                 with yt_dlp.YoutubeDL(options) as ydl:
