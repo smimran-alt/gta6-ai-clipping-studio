@@ -3,6 +3,15 @@ import csv
 import json
 from pathlib import Path
 import requests
+import re
+
+GTA_PATTERN = re.compile(r'(?i)(grand[ -]?theft[ -]?auto|\\bgta\\s*(?:[1-6]|i{1,3}|iv|v|vi|online|vice city|san andreas)\\b)')
+GAMEPLAY_PATTERN = re.compile(r'(?i)(gameplay|walkthrough|playthrough|longplay|free[ -]?roam|mission|police chase|car theft|game footage)')
+EXCLUDE_PATTERN = re.compile(r'(?i)(trailer|advert|commercial|movie|film|review|reaction|top ?\\d+|compilation|soundtrack|music video|news|announcement|daz studio)')
+
+def relevant(row):
+    title = str(row.get('title',''))
+    return bool(GTA_PATTERN.search(title) and GAMEPLAY_PATTERN.search(title) and not EXCLUDE_PATTERN.search(title))
 
 OUT = Path(__file__).resolve().parents[1] / "output"
 OUT.mkdir(exist_ok=True)
@@ -11,7 +20,7 @@ FIELDS = ["title","source","page_url","license","creator","media_url","license_e
 
 def archive_candidates():
     rows=[]
-    for term in ['grand theft auto', 'video game gameplay', 'car chase game']:
+    for term in ['grand theft auto gameplay', 'grand theft auto longplay', 'gta san andreas gameplay', 'gta vice city gameplay']:
         params={"q": f'({term}) AND mediatype:movies AND licenseurl:*',
                 "fl[]": ["identifier","title","creator","licenseurl"],
                 "rows":15,"page":1,"output":"json"}
@@ -35,7 +44,7 @@ def archive_candidates():
 def commons_candidates():
     rows=[]
     api="https://commons.wikimedia.org/w/api.php"
-    for term in ['video game gameplay filetype:video', 'car chase video filetype:video']:
+    for term in ['grand theft auto gameplay filetype:video', 'gta san andreas gameplay filetype:video']:
         try:
             r=requests.get(api,params={"action":"query","generator":"search","gsrsearch":term,
                 "gsrnamespace":6,"gsrlimit":20,"prop":"imageinfo","iiprop":"extmetadata|url",
@@ -57,18 +66,21 @@ def commons_candidates():
 
 def main():
     rows=archive_candidates()+commons_candidates()
-    unique={row["page_url"]:row for row in rows}
+    relevant_rows=[row for row in rows if relevant(row)]
+    unique={row["page_url"]:row for row in relevant_rows}
     with (OUT/"licensed_candidates.csv").open("w",newline="",encoding="utf-8") as f:
         writer=csv.DictWriter(f,fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(unique.values())
     (OUT/"licensed_discovery_summary.json").write_text(json.dumps({
         "candidate_count":len(unique),
+        "total_unfiltered":len(rows),
+        "excluded_irrelevant":len(rows)-len(relevant_rows),
         "rights_verified":0,
         "automatic_downloads":0,
         "note":"Candidate licences are metadata claims, not verified clearance. No automatic reuse."
     },indent=2),encoding="utf-8")
-    print(f"Found {len(unique)} licence-labelled candidates; none approved automatically")
+    print(f"Found {len(unique)} GTA gameplay candidates after filtering {len(rows)} search results; none approved automatically")
 
 if __name__=="__main__":
     main()
