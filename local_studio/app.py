@@ -24,6 +24,7 @@ import editor
 import engagement
 import comment_download
 import watermark_edit
+import color_grade
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -182,7 +183,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.8.4"
+APP_VERSION="v1.8.5"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -304,6 +305,10 @@ if rows:
                                  hide_index=True,use_container_width=True)
                     st.markdown("#### Automatically download recommended clips")
                     st.caption("Downloads all recommended 30-second intervals from this selected video, without choosing them one by one. Only use footage you are authorized to download and reuse.")
+                    st.markdown("##### Automatic Shorts colour grading")
+                    grade_preset=st.selectbox("Video look",list(color_grade.PRESETS),
+                                             index=0,key="grade_preset_"+url)
+                    st.caption("Natural cinematic is the default. Colour grading improves appearance but does not remove watermarks or creator attribution.")
                     st.markdown("##### Optional watermark-area blur (authorized footage only)")
                     blur_requested=st.checkbox("Blur a selected logo/watermark area after download (keep originals)",value=False,key="blur_requested_"+url)
                     if blur_requested:
@@ -336,12 +341,23 @@ if rows:
                             if any(item.get("edit_error") for item in completed):
                                 st.warning("Some blur edits failed. Originals were preserved; see the status table.")
                         if completed:
+                            for item in completed:
+                                source_path=Path(item.get("edited_file",item["file"]))
+                                if grade_preset!="Original":
+                                    try:
+                                        graded=source_path.with_name(source_path.stem+"_graded.mp4")
+                                        color_grade.grade(source_path,graded,grade_preset)
+                                        item["graded_file"]=str(graded)
+                                    except Exception as exc:
+                                        item["grade_error"]=str(exc)[:250]
+                            if any(item.get("grade_error") for item in completed):
+                                st.warning("Some colour edits failed. Original files were preserved; check the status table.")
                             from urllib.parse import parse_qs,urlparse
                             video_id=parse_qs(urlparse(url).query).get("v",["selected_video"])[0]
                             zip_path=OUT/"most_discussed"/f"recommended_clips_{video_id}.zip"
                             with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
                                 for item in completed:
-                                    archive.write(item.get("edited_file",item["file"]),arcname=Path(item.get("edited_file",item["file"])).name)
+                                    archive.write(item.get("graded_file",item.get("edited_file",item["file"])),arcname=Path(item.get("graded_file",item.get("edited_file",item["file"]))).name)
                                 archive.writestr("download_status.json",json.dumps(batch_results,indent=2))
                             st.session_state["batch_zip_by_url"]=st.session_state.get("batch_zip_by_url",{})
                             st.session_state["batch_zip_by_url"][url]=str(zip_path)
