@@ -36,8 +36,40 @@ def search(query,limit):
                         "comments":None,"views":entry.get("view_count"),"duration":entry.get("duration")})
     return results
 
+import requests
+import xml.etree.ElementTree as ET
+
+def search_other(query, limit, platform):
+    domains={"Twitch":"twitch.tv","Vimeo":"vimeo.com","Dailymotion":"dailymotion.com","Internet Archive":"archive.org"}
+    domain=domains[platform]
+    response=requests.get("https://www.bing.com/search",params={"q":query+" site:"+domain,"format":"rss","count":str(limit)},headers={"User-Agent":"Mozilla/5.0"},timeout=20)
+    response.raise_for_status()
+    root=ET.fromstring(response.text)
+    rows=[]
+    for item in root.findall(".//item"):
+        title=item.findtext("title","")
+        link=item.findtext("link","")
+        if is_gta6(title) and domain in urlparse(link).netloc.lower():
+            rows.append({"title":title,"url":link,"platform":platform,"comments":None,"views":None,"duration":None})
+    return rows[:limit]
+
+def search_platform(query,limit,platform):
+    if platform=="YouTube":
+        return [dict(row,platform="YouTube") for row in search(query,limit)]
+    if platform=="All platforms":
+        found=[]
+        for source in ("YouTube","Twitch","Vimeo","Dailymotion","Internet Archive"):
+            try:
+                found.extend(search_platform(query,limit,source))
+            except Exception:
+                pass
+        return found
+    return search_other(query,limit,platform)
+
 def enrich(rows):
     for item in rows:
+        if item.get("platform","YouTube") != "YouTube":
+            continue
         try:
             with yt_dlp.YoutubeDL({"quiet":True,"no_warnings":True,"skip_download":True,
                                    "noplaylist":True,"socket_timeout":12}) as ydl:
@@ -98,18 +130,19 @@ def process(source, title, minutes, narration, vertical):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.1.0"
+APP_VERSION="v1.2.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, rank by available comments, then generate 60-second MP4 clips. No Google API key.")
 if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
     st.error("FFmpeg and ffprobe are not installed or not in PATH. Install FFmpeg before processing.")
-query=st.text_input("Search YouTube",value="GTA 6 gameplay")
+platform=st.selectbox("Search platform",["All platforms","YouTube","Twitch","Vimeo","Dailymotion","Internet Archive"])
+query=st.text_input("Search videos",value="GTA 6 gameplay")
 limit=st.slider("Search results",5,30,12)
 if st.button("1. Find GTA 6 videos",type="primary"):
     with st.spinner("Searching public video listings..."):
         try:
-            st.session_state["results"]=search(query,limit)
+            st.session_state["results"]=search_platform(query,limit,platform)
             st.success(f"Found {len(st.session_state['results'])} GTA VI-titled videos")
         except Exception as exc: st.error(f"Search unavailable: {exc}")
 rows=st.session_state.get("results",[])
@@ -118,17 +151,20 @@ if rows:
         with st.spinner("Fetching public metadata (some videos may block access)..."):
             st.session_state["results"]=enrich(rows)
             rows=st.session_state["results"]
-    st.dataframe([{"title":r["title"],"comments":r["comments"],"views":r["views"],
-                   "duration_seconds":r["duration"],"Watch on YouTube":r["url"],"url":r["url"]} for r in rows],
-                 column_config={"Watch on YouTube":st.column_config.LinkColumn("Watch on YouTube",display_text="▶ Watch video",help="Open this video directly on YouTube"),
+    st.dataframe([{"platform":r.get("platform","YouTube"),"title":r["title"],"comments":r["comments"],"views":r["views"],
+                   "duration_seconds":r["duration"],"Watch video":r["url"],"url":r["url"]} for r in rows],
+                 column_config={"Watch video":st.column_config.LinkColumn("Watch video",display_text="▶ Watch video",help="Open this video directly on YouTube"),
                                 "url":st.column_config.TextColumn("url")},
                  use_container_width=True,hide_index=True)
     selected=st.selectbox("Choose video",list(range(len(rows))),
                           format_func=lambda i:rows[i]["title"][:105])
     url=rows[selected]["url"]
     st.markdown("#### Preview selected video")
-    st.video(url)
-    st.link_button("Open video on YouTube",url)
+    if rows[selected].get("platform","YouTube")=="YouTube":
+        st.video(url)
+    else:
+        st.info("Preview may be restricted on this platform. Open the source website.")
+    st.link_button("Open video on source website",url)
     if st.button("Check selected video's availability"):
         with st.spinner("Checking YouTube..."):
             try:
@@ -178,4 +214,4 @@ if st.session_state.get("zip_path") and Path(st.session_state["zip_path"]).exist
     with open(st.session_state["zip_path"],"rb") as f:
         st.download_button("Download all GTA 6 clips (ZIP)",data=f,
                            file_name="gta6_shorts.zip",mime="application/zip")
-st.caption("Search metadata can be incomplete; downloads may be blocked. Voice commentary is generic and not based on AI visual understanding.")
+st.caption("Non-YouTube discovery uses public web search; availability is not guaranteed. Search metadata can be incomplete; downloads may be blocked. Voice commentary is generic and not based on AI visual understanding.")
