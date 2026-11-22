@@ -1,0 +1,33 @@
+name: GTA 6 Only - Rockstar Extended Look Clips
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gta6-official-clips:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install video and narration tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          python -m pip install yt-dlp requests
+      - name: Clip official GTA VI Extended Look in one-minute segments
+        env:
+          GTA6_MAX_MINUTES: "30"
+        run: python v3/gta6_official.py
+      - name: Upload GTA VI MP4 clips and processing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta6-official-60-second-clips
+          path: |
+            output/v3_clips/gta6_extended_look/
+            output/gta6_report.json
+          if-no-files-found: warn
+          retention-days: 7
