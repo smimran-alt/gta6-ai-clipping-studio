@@ -267,6 +267,9 @@ if rows:
     if st.button("Analyze most-discussed GTA 6 moments automatically",type="primary",key="auto_comment_analyze"):
         with st.spinner("Fetching engagement and sampling public timestamped comments. Some platforms may restrict comments..."):
             candidates=[item for item in rows if item.get("platform","YouTube")=="YouTube"]
+            if candidates:
+                candidates=enrich(candidates)
+                st.session_state["results"]=engagement.engagement_sort(rows)
             if not candidates:
                 st.warning("No YouTube results found. Other platforms currently provide video-level metadata only; timestamped comment analysis is unavailable.")
             else:
