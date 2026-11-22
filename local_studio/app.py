@@ -104,16 +104,16 @@ def length(path):
     return float(command(["ffprobe","-v","error","-show_entries","format=duration",
                           "-of","default=noprint_wrappers=1:nokey=1",str(path)]))
 
-def process(source, title, minutes, narration, vertical):
+def process(source, title, minutes, narration, vertical, clip_seconds=60):
     folder=OUT/"clips"
     folder.mkdir(parents=True,exist_ok=True)
     for old in folder.glob("clip_*.mp4"): old.unlink()
     duration=length(source)
-    count=min((int(duration+59.999)//60),minutes)
+    count=min((int(duration+clip_seconds-0.001)//clip_seconds),minutes)
     if count==0: raise RuntimeError("Video is shorter than one second")
     files=[]
     for i in range(count):
-        segment_length=min(60,duration-i*60)
+        segment_length=min(clip_seconds,duration-i*clip_seconds)
         out=folder/f"clip_{i+1:03d}.mp4"
         with tempfile.TemporaryDirectory() as tmp:
             audio=Path(tmp)/"voice.wav"
@@ -130,7 +130,7 @@ def process(source, title, minutes, narration, vertical):
                     raise RuntimeError("Install eSpeak NG to generate voice commentary.")
             vf=["scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"] if vertical else []
             vf.append(f"drawtext=text='GTA 6 - PART {i+1}':fontcolor=white:fontsize=38:x=(w-text_w)/2:y=40:box=1:boxcolor=black@0.65:boxborderw=12")
-            args=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",str(i*60),"-i",str(source)]
+            args=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",str(i*clip_seconds),"-i",str(source)]
             if narration: args+=["-i",str(audio)]
             args+=["-t",str(segment_length),"-vf",",".join(vf),"-map","0:v:0"]
             if narration: args+=["-map","1:a:0","-af","apad"]
@@ -144,10 +144,10 @@ def process(source, title, minutes, narration, vertical):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.2"
+APP_VERSION="v1.3.3"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
-st.caption("Find GTA VI videos, rank by available comments, then generate 60-second MP4 clips. No Google API key.")
+st.caption("Find GTA VI videos, preview them, and select a 30-second segment without downloading the full source where supported.")
 if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
     st.error("FFmpeg and ffprobe are not installed or not in PATH. Install FFmpeg before processing.")
 platform=st.selectbox("Search platform",["All platforms","YouTube","Twitch","Vimeo","Dailymotion","Internet Archive"])
@@ -201,7 +201,16 @@ else:
 st.subheader("3. Generate clips")
 st.warning("You must have permission to download and reuse the video. Commentary does not guarantee copyright clearance.")
 rights=st.checkbox("I have the rights or permission needed to download and reuse this footage")
-minutes=st.number_input("Maximum clips (60 seconds each)",min_value=1,max_value=60,value=26)
+minutes=st.number_input("Maximum clips (60 seconds each)",min_value=1,max_value=60,value=1)
+segment_mode=st.checkbox("Download only a selected 30-second segment (experimental)",value=True)
+selected_duration=rows[selected].get("duration") if rows else None
+if segment_mode:
+    if selected_duration and selected_duration>30:
+        start_second=st.slider("Clip start time (seconds)",min_value=0,max_value=int(selected_duration)-30,value=0,step=1)
+    else:
+        start_second=st.number_input("Clip start time (seconds)",min_value=0,value=0,step=10)
+    st.caption(f"Selected interval: {int(start_second)//60:02d}:{int(start_second)%60:02d} to {(int(start_second)+30)//60:02d}:{(int(start_second)+30)%60:02d}. Partial downloads require FFmpeg and host support.")
+    minutes=1
 narration=st.checkbox("Add English computer voice commentary",value=True)
 vertical=st.checkbox("Create vertical 9:16 Shorts",value=True)
 quality=st.selectbox("Maximum download resolution",["360p","480p","720p"],index=1)
@@ -217,30 +226,35 @@ if st.button("4. Download source and create MP4 clips",disabled=not rights or no
                 format_rule=f"b[height<={height}]/bv*[height<={height}]+ba"
                 options={"format":format_rule,"merge_output_format":"mp4",
                          "outtmpl":template,"noplaylist":True,
-                         "max_filesize":max_bytes,"quiet":True,"no_warnings":True}
+                         "max_filesize":max_bytes}
+                if segment_mode:
+                    options["download_ranges"]=lambda info,ydl: [(float(start_second),float(start_second)+30.0)]
+                    options["force_keyframes_at_cuts"]=True
+                    options["external_downloader"]="ffmpeg"
                 with yt_dlp.YoutubeDL(options) as ydl:
                     info=ydl.extract_info(url,download=False)
                     if not info:
-                        raise RuntimeError("Video metadata unavailable. Try another source.")
-                    selected=info.get("requested_formats") or [info]
-                    estimated=sum((part.get("filesize") or part.get("filesize_approx") or 0)
-                                  for part in selected)
-                    if estimated and estimated>max_bytes:
-                        raise RuntimeError(
-                            f"Selected {quality} source is approximately {estimated/1024/1024:.0f} MB, "
-                            f"above your {size_mb} MB limit. Choose a shorter video or increase the limit.")
-                    meta=ydl.extract_info(url,download=True)
-                matches=[path for path in Path(tmp).glob("source.*")
+                        raise RuntimeError("Video metadata unavailable.")
+                    if segment_mode:
+                        duration=info.get("duration")
+                        if duration and float(start_second)+30>float(duration):
+                            raise RuntimeError("Selected start time is too close to the end of the video.")
+                    else:
+                        selected_formats=info.get("requested_formats") or [info]
+                        estimated=sum((part.get("filesize") or part.get("filesize_approx") or 0)
+                                      for part in selected_formats)
+                        if estimated and estimated>max_bytes:
+                            raise RuntimeError(f"Full video is about {estimated/1024/1024:.0f} MB, above your {size_mb} MB limit. Enable 30-second segment mode.")
+                    ydl.download([url])
+                matches=[path for path in Path(tmp).glob("source*")
                          if path.suffix.lower() in (".mp4",".mkv",".webm",".mov")
                          and path.is_file()]
                 if not matches:
-                    raise RuntimeError("No video file was downloaded. This source may be restricted, "
-                                       "the requested quality unavailable, or the size limit exceeded. "
-                                       "Try a shorter video or another resolution.")
+                    raise RuntimeError("No video segment was saved. The host may not support partial downloads or the format may be restricted.")
                 candidate=max(matches,key=lambda path:path.stat().st_size)
                 if candidate.stat().st_size>max_bytes:
-                    raise RuntimeError(f"Downloaded file exceeds {size_mb} MB limit.")
-                clips=process(candidate,meta.get("title") or "GTA 6",int(minutes),narration,vertical)
+                    raise RuntimeError(f"Downloaded segment exceeded the {size_mb} MB limit.")
+                clips=process(candidate,meta.get("title") or "GTA 6",int(minutes),narration,vertical,30 if segment_mode else 60)
             import zipfile
             zip_path=OUT/"gta6_shorts.zip"
             with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
