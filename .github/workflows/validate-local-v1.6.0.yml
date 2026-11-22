@@ -1,0 +1,45 @@
+name: GTA Clipping Studio v1.6.0 Validation
+on:
+  push:
+    branches: [release/v1.6.0]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install FFmpeg and Python dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install -r local_studio/requirements.txt
+      - name: Compile all studio modules
+        run: python -m py_compile local_studio/app.py local_studio/discovery.py local_studio/highlights.py
+      - name: Test highlight scoring on known signals
+        run: |
+          PYTHONPATH=local_studio python - <<'PY'
+          import highlights
+          assert highlights.rank_windows(29,[],[])==[]
+          rows=highlights.rank_windows(90,[5,6,7,25,26,27,55,56],[.1]*90,count=3)
+          assert rows and all(item["end"]-item["start"]==30 for item in rows)
+          assert all(abs(a["start"]-b["start"])>=30 for i,a in enumerate(rows) for b in rows[i+1:])
+          print("PASS: 30-second scoring and non-overlapping recommendations")
+          PY
+      - name: Test end-to-end 30-second export
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=5 -f lavfi -i sine=frequency=500:sample_rate=8000 -t 36 -c:v libx264 -preset ultrafast -c:a aac -y /tmp/gta_test_source.mp4
+          PYTHONPATH=local_studio python - <<'PY'
+          from pathlib import Path
+          import highlights
+          source=Path("/tmp/gta_test_source.mp4")
+          report=highlights.analyze(source,count=2)
+          assert report["recommendations"],report
+          output=highlights.export_clip(source,report["recommendations"][0]["start"],Path("/tmp/gta_highlight.mp4"),vertical=True)
+          assert output.exists() and output.stat().st_size>1024
+          assert 27<=highlights.probe_duration(output)<=31
+          print("PASS: local analysis and 30-second vertical MP4 export")
+          PY
