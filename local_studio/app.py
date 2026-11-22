@@ -20,6 +20,7 @@ import streamlit as st
 import yt_dlp
 import discovery
 import highlights
+import editor
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -178,10 +179,10 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.6.0"
+APP_VERSION="v1.7.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
-st.caption("Find GTA 6 footage, analyze scene changes and audio locally, and export recommended 30-second highlights.")
+st.caption("Discover gameplay, recommend highlights, create captions and commentary, and edit Shorts locally.")
 st.info(f"Output folder: {OUT}")
 if st.button("Open output folder on this computer"):
     try:
@@ -419,3 +420,78 @@ if last_export and Path(last_export).exists():
     with open(last_export,"rb") as file:
         st.download_button("Download recommended 30-second MP4",data=file,
                            file_name=Path(last_export).name,mime="video/mp4")
+
+st.divider()
+st.subheader("7. Captions, AI commentary and Shorts editor")
+st.caption("Edit a saved video. Captions use optional local Whisper speech recognition; commentary uses your scene notes and optional OpenAI API. No video-event recognition is claimed.")
+edit_sources=[]
+for folder in (OUT,OUT/"analysis_sources",OUT/"highlights",OUT/"clips"):
+    if folder.exists():
+        edit_sources.extend(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in (".mp4",".mkv",".webm",".mov"))
+edit_sources=sorted(set(edit_sources),key=lambda p:str(p))
+if edit_sources:
+    edit_source=st.selectbox("Source video for editing",edit_sources,
+                              format_func=lambda p:f"{p.parent.name}/{p.name}",key="edit_source")
+    try:
+        edit_length=editor.duration(edit_source)
+        st.caption(f"Source duration: {edit_length:.1f} seconds")
+        edit_start=st.number_input("Start time (seconds)",min_value=0.0,max_value=max(0.0,edit_length-1),value=0.0,step=1.0,key="edit_start")
+    except Exception as exc:
+        edit_start=0.0
+        st.error(f"Could not read video duration: {exc}")
+    st.video(str(edit_source),start_time=int(edit_start))
+    edit_vertical=st.checkbox("Crop to vertical 9:16",value=True,key="edit_vertical")
+    edit_title=st.text_input("Optional title overlay",value="",key="edit_title",max_chars=50)
+    auto_captions=st.checkbox("Generate automatic speech captions (optional faster-whisper)",value=False,key="edit_captions")
+    if auto_captions and st.button("Transcribe speech into captions"):
+        with st.spinner("Running local Whisper speech recognition (first run downloads a model)..."):
+            try:
+                segments=editor.transcribe(edit_source)
+                subtitle_dir=OUT/"editor"
+                subtitle_dir.mkdir(parents=True,exist_ok=True)
+                subtitle_file=subtitle_dir/"speech_captions.srt"
+                count=editor.write_srt(segments,subtitle_file,offset=edit_start,limit=30)
+                st.session_state["edit_subtitle_path"]=str(subtitle_file)
+                st.session_state["edit_transcript"]=" ".join(x["text"] for x in segments if edit_start<=x["start"]<edit_start+30)[:2500]
+                st.success(f"Created {count} caption lines. Saved {subtitle_file}")
+            except Exception as exc: st.error(f"Caption generation failed: {exc}")
+    st.caption("Caption transcription works on spoken audio. Silent gameplay will not produce meaningful captions. Change the start time? Transcribe again to align captions.")
+    notes=st.text_area("Describe what happens in this clip (for commentary)",placeholder="Example: My car escapes a police pursuit and narrowly misses a truck.",key="scene_notes")
+    use_ai=st.checkbox("Use OpenAI to draft commentary from my notes (optional)",value=False,key="edit_ai")
+    api_key=st.text_input("OpenAI API key (used only for this request)",type="password",key="edit_api_key") if use_ai else ""
+    voiceover=st.checkbox("Generate spoken voiceover with local TTS (optional pyttsx3)",value=False,key="edit_voice")
+    if st.button("Generate commentary script"):
+        try:
+            if use_ai and not api_key: raise ValueError("Enter an API key or turn off OpenAI commentary.")
+            script=editor.commentary(notes,st.session_state.get("edit_transcript",""),api_key if use_ai else None)
+            st.session_state["edit_script"]=script
+        except Exception as exc: st.error(f"Commentary generation failed: {exc}")
+    script=st.text_area("Review or edit commentary script",value=st.session_state.get("edit_script",""),key="edit_script_review")
+    st.caption("When voiceover is enabled, it replaces the original audio in the exported video. Otherwise original audio is retained.")
+    burn=st.checkbox("Burn generated captions into video",value=False,key="edit_burn")
+    if st.button("Render edited 30-second MP4",type="primary",key="render_edited"):
+        with st.spinner("Rendering edited clip and validating MP4..."):
+            try:
+                outdir=OUT/"editor"
+                outdir.mkdir(parents=True,exist_ok=True)
+                srt=st.session_state.get("edit_subtitle_path") if burn else None
+                if burn and (not srt or not Path(srt).exists()):
+                    raise ValueError("Generate captions before selecting burn captions.")
+                wav=None
+                if voiceover:
+                    if not script.strip(): raise ValueError("Write or generate a commentary script first.")
+                    wav=editor.synthesize(script,outdir/"voiceover.wav")
+                target=outdir/"edited_short.mp4"
+                result=editor.edit(edit_source,target,start=edit_start,seconds=30,vertical=edit_vertical,
+                                   srt=srt,voice=wav,title=edit_title)
+                st.session_state["edited_short_path"]=str(result)
+                st.success(f"Saved and verified {result}")
+            except Exception as exc:
+                st.error(f"Video editor failed: {exc}")
+else:
+    st.info("Save or upload a video in the discovery/highlight sections before editing.")
+edited_path=st.session_state.get("edited_short_path")
+if edited_path and Path(edited_path).exists():
+    st.video(edited_path)
+    with open(edited_path,"rb") as file:
+        st.download_button("Download edited Short MP4",data=file,file_name="edited_short.mp4",mime="video/mp4")
