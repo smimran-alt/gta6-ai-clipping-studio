@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 
 import yt_dlp
+import requests
+from urllib.parse import quote
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"output"
@@ -70,58 +72,101 @@ def create_clip(src, title, index, count, length, folder):
         return {"file":str(dest.relative_to(OUT)),"minute":index+1,"duration_seconds":round(length,2),
                 "narration":narration}
 
+def archive_sources():
+    """Discover actual GTA gameplay MP4 files hosted by Internet Archive."""
+    api="https://archive.org/advancedsearch.php"
+    queries=['title:("grand theft auto" AND gameplay)', 'title:("gta" AND longplay)',
+             'title:("grand theft auto" AND longplay)', 'title:("gta" AND gameplay)']
+    seen=set()
+    for query in queries:
+        try:
+            resp=requests.get(api,params={"q":query+" AND mediatype:movies",
+                "fl[]":["identifier","title"],"rows":30,"output":"json"},timeout=25)
+            resp.raise_for_status()
+            for item in resp.json().get("response",{}).get("docs",[]):
+                ident=item.get("identifier","")
+                title=str(item.get("title",""))
+                if not ident or ident in seen: continue
+                seen.add(ident)
+                if not re.search(r"(?i)(grand theft auto|\\bgta\\b)",title): continue
+                if not re.search(r"(?i)(gameplay|longplay|walkthrough|playthrough|free roam)",title): continue
+                if re.search(r"(?i)(trailer|movie|review|reaction|soundtrack|music video)",title): continue
+                yield {"identifier":ident,"title":title,"page":"https://archive.org/details/"+ident}
+        except Exception as exc:
+            print("Archive search error:",str(exc)[:200])
+
+def download_archive(candidate, dest):
+    ident=candidate["identifier"]
+    response=requests.get("https://archive.org/metadata/"+quote(ident,safe=""),timeout=35)
+    response.raise_for_status()
+    files=response.json().get("files",[])
+    options=[]
+    for item in files:
+        name=item.get("name","")
+        if not name.lower().endswith(".mp4"): continue
+        if item.get("source")=="derivative" and "thumb" in name.lower(): continue
+        try: size=int(item.get("size",0))
+        except (TypeError,ValueError): continue
+        if 1_000_000<=size<=350_000_000: options.append((size,name))
+    if not options: raise RuntimeError("No MP4 between 1 MB and 350 MB")
+    options.sort()
+    filename=options[0][1]
+    url="https://archive.org/download/"+quote(ident,safe="")+"/"+quote(filename,safe="/")
+    with requests.get(url,stream=True,timeout=60) as resp:
+        resp.raise_for_status()
+        with dest.open("wb") as file:
+            total=0
+            for chunk in resp.iter_content(1024*1024):
+                if not chunk: continue
+                total+=len(chunk)
+                if total>350_000_000: raise RuntimeError("Archive MP4 exceeded 350 MB")
+                file.write(chunk)
+    return url
+
+def process_video(file,title,source_url,report):
+    seconds=float(run(["ffprobe","-v","error","-show_entries","format=duration",
+                       "-of","default=noprint_wrappers=1:nokey=1",str(file)]))
+    max_minutes=int(os.getenv("V3_MAX_MINUTES","30"))
+    count=min(math.ceil(seconds/60),max_minutes)
+    if count<1: raise RuntimeError("No playable video duration")
+    folder=DEST/"video_01"
+    folder.mkdir(parents=True,exist_ok=True)
+    clips=[]
+    for i in range(count):
+        clips.append(create_clip(file,title,i,count,min(60,seconds-i*60),folder))
+    report["videos"].append({"source_url":source_url,"title":title,
+        "duration_seconds":seconds,"clips":clips})
+    report["status"]="clips_created_review_before_publication"
+
 def main():
-    report={"version":"3.0","status":"not_started","videos":[],"errors":[],
-            "commentary_basis":"Title and minute number only; no visual scene understanding",
-            "rights":"Review source rights and resulting videos before reuse or publication"}
+    report={"version":"3.1","status":"not_started","videos":[],"errors":[],
+            "commentary_basis":"Generic original narration based on title and minute, not visual scene analysis",
+            "rights":"Archive uploads and game footage require independent rights review before publication"}
+    # Archive is primary: it supports public direct-file MP4 downloads without YouTube login.
     try:
-        rows=candidates()
-        report["candidates"]=len(rows)
-        if not rows:
-            report["errors"].append("No GTA gameplay candidates in ranked_by_comments.csv")
-        for row in rows[:8]:
-            url=row["url"]
+        checked=0
+        for candidate in archive_sources():
+            if checked>=20 or report["videos"]: break
+            checked+=1
             try:
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    tmp=Path(tmpdir)
-                    template=str(tmp/"gameplay.%(ext)s")
-                    opts={"format":"best[height<=720][ext=mp4]/best[height<=720]/best",
-                          "outtmpl":template,"noplaylist":True,"quiet":True,
-                          "no_warnings":True,"socket_timeout":20,
-                          "retries":2,"fragment_retries":2,"max_filesize":400*1024*1024,
-                          "merge_output_format":"mp4"}
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        info=ydl.extract_info(url,download=True)
-                        file=Path(ydl.prepare_filename(info))
-                    if not file.exists():
-                        matches=list(tmp.glob("gameplay.*"))
-                        if not matches: raise RuntimeError("Downloader returned no playable file")
-                        file=matches[0]
-                    seconds=float(run(["ffprobe","-v","error","-show_entries","format=duration",
-                                       "-of","default=noprint_wrappers=1:nokey=1",str(file)]))
-                    max_minutes=int(os.getenv("V3_MAX_MINUTES","30"))
-                    count=min(math.ceil(seconds/60),max_minutes)
-                    if count<1: raise RuntimeError("No video duration")
-                    folder=DEST/"video_01"
-                    folder.mkdir(parents=True,exist_ok=True)
-                    clips=[]
-                    for i in range(count):
-                        clips.append(create_clip(file,info.get("title") or row["title"],i,count,
-                                                 min(60,seconds-i*60),folder))
-                    report["videos"].append({"source_url":url,"title":info.get("title"),
-                        "duration_seconds":seconds,"clips":clips})
-                    report["status"]="clips_created_review_before_publication"
-                    break
+                    file=Path(tmpdir)/"gameplay.mp4"
+                    source_url=download_archive(candidate,file)
+                    process_video(file,candidate["title"],source_url,report)
             except Exception as exc:
-                report["errors"].append({"url":url,"error":str(exc)[:500]})
-        if not report["videos"]: report["status"]="no_downloadable_source"
+                report["errors"].append({"source":candidate["page"],"error":str(exc)[:250]})
+        report["archive_candidates_checked"]=checked
+        if not report["videos"]:
+            report["status"]="no_downloadable_source"
+            report["errors"].append("No suitable downloadable Internet Archive GTA gameplay MP4 found")
     except Exception as exc:
         report["status"]="failed"
         report["errors"].append(str(exc))
     (OUT/"v3_report.json").write_text(json.dumps(report,indent=2),encoding="utf-8")
     print(json.dumps({"status":report["status"],"videos":len(report["videos"]),
-        "clips":sum(len(x["clips"]) for x in report["videos"]),"errors":report["errors"]},indent=2))
-    if not report["videos"]:\n        print("No MP4 clips produced. YouTube may require authentication; see output/v3_report.json")
+        "clips":sum(len(x["clips"]) for x in report["videos"]),"errors":report["errors"][:4]},indent=2))
+    if not report["videos"]:
+        print("No clips created; inspect output/v3_report.json. No video is falsely claimed as produced.")
 
 if __name__=="__main__":
     main()
