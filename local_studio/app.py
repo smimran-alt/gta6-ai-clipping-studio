@@ -144,7 +144,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.4"
+APP_VERSION="v1.3.5"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, preview them, and select a 30-second segment without downloading the full source where supported.")
@@ -254,7 +254,7 @@ if st.button("4. Download source and create MP4 clips",disabled=not rights or no
                 candidate=max(matches,key=lambda path:path.stat().st_size)
                 if candidate.stat().st_size>max_bytes:
                     raise RuntimeError(f"Downloaded segment exceeded the {size_mb} MB limit.")
-                clips=process(candidate,meta.get("title") or "GTA 6",int(minutes),narration,vertical,30 if segment_mode else 60)
+                clips=process(candidate,info.get("title") or "GTA 6",int(minutes),narration,vertical,30 if segment_mode else 60)
             import zipfile
             zip_path=OUT/"gta6_shorts.zip"
             with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
