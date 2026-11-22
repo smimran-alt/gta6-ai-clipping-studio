@@ -15,7 +15,7 @@ def download_range(url,start,output_dir,quality=360,max_mb=500):
     output_dir.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory() as temp:
         template=str(Path(temp)/"segment.%(ext)s")
-        opts={"format":f"b[height<={quality}]/bv*[height<={quality}]+ba",
+        opts={"format":f"bv*[height<={quality}]+ba/b[height<={quality}]/b",
               "merge_output_format":"mp4","outtmpl":template,"noplaylist":True,
               "max_filesize":int(max_mb)*1024*1024,
               "download_ranges":yt_dlp.utils.download_range_func(None,[(float(start),float(start)+30.0)]),
@@ -54,7 +54,6 @@ def download_batch(url,moments,output_dir,quality=360,max_mb=500):
     output_dir=Path(output_dir)
     output_dir.mkdir(parents=True,exist_ok=True)
     results=[]
-    missing=[]
     for index,moment in enumerate(moments,1):
         start=int(moment["start"])
         target=output_dir/f"clip_{index:02d}_{start:06d}s.mp4"
@@ -64,14 +63,17 @@ def download_batch(url,moments,output_dir,quality=360,max_mb=500):
             edit(downloaded,target,start=0,seconds=30,vertical=False)
             if not 27<=video_duration(target)<=31:
                 raise RuntimeError("Rendered segment duration is not approximately 30 seconds")
+            from rights_pipeline import probe
+            info=probe(target)
             results.append({"clip":index,"start":start,"end":start+30,
                             "timestamp_mentions":moment["timestamped_comments"],
-                            "status":"saved","file":str(target)})
+                            "status":"saved","file":str(target),
+                            "actual_size_MB":round(target.stat().st_size/1048576,1),
+                            "actual_seconds":round(info["duration"],1)})
         except Exception as exc:
             results.append({"clip":index,"start":start,"end":start+30,
                             "timestamp_mentions":moment["timestamped_comments"],
                             "status":"failed","error":str(exc)[:300]})
-            missing.append(index-1)
     # Full source fallback is intentionally disabled: it may download large copyrighted
     # videos unexpectedly. Show failures rather than falsely claiming five clips.
     return results
