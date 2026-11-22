@@ -44,3 +44,34 @@ def download_range(url,start,output_dir,quality=360,max_mb=500):
             raise RuntimeError(f"Downloaded interval is {measured:.1f}s, not approximately 30s. Full video was not accepted.")
         os.replace(pending,target)
         return target
+
+def download_batch(url,moments,output_dir,quality=360,max_mb=500):
+    """Try independent range downloads; if some fail, optionally fetch a bounded full
+    source once and cut missing windows locally. Return each clip's status.
+    Never present failed downloads as successful.
+    """
+    from editor import edit, duration as video_duration
+    output_dir=Path(output_dir)
+    output_dir.mkdir(parents=True,exist_ok=True)
+    results=[]
+    missing=[]
+    for index,moment in enumerate(moments,1):
+        start=int(moment["start"])
+        target=output_dir/f"clip_{index:02d}_{start:06d}s.mp4"
+        try:
+            downloaded=download_range(url,start,output_dir,quality=quality,max_mb=max_mb)
+            # Remux to consistent MP4 and unique clip filename.
+            edit(downloaded,target,start=0,seconds=30,vertical=False)
+            if not 27<=video_duration(target)<=31:
+                raise RuntimeError("Rendered segment duration is not approximately 30 seconds")
+            results.append({"clip":index,"start":start,"end":start+30,
+                            "timestamp_mentions":moment["timestamped_comments"],
+                            "status":"saved","file":str(target)})
+        except Exception as exc:
+            results.append({"clip":index,"start":start,"end":start+30,
+                            "timestamp_mentions":moment["timestamped_comments"],
+                            "status":"failed","error":str(exc)[:300]})
+            missing.append(index-1)
+    # Full source fallback is intentionally disabled: it may download large copyrighted
+    # videos unexpectedly. Show failures rather than falsely claiming five clips.
+    return results
