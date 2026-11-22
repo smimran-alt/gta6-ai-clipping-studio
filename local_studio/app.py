@@ -98,7 +98,10 @@ def enrich(rows):
                                       -(r["views"] or 0)))
 
 def command(args,timeout=300):
-    return subprocess.run(args,check=True,capture_output=True,text=True,timeout=timeout).stdout.strip()
+    result=subprocess.run(args,capture_output=True,text=True,timeout=timeout,errors="replace")
+    if result.returncode:
+        raise RuntimeError(f"FFmpeg exited {result.returncode}: {(result.stderr or result.stdout)[-2000:]}")
+    return result.stdout.strip()
 
 def length(path):
     return float(command(["ffprobe","-v","error","-show_entries","format=duration",
@@ -128,14 +131,14 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
                     command(["espeak","-v","en-us","-s","155","-w",str(audio),script])
                 else:
                     raise RuntimeError("Install eSpeak NG to generate voice commentary.")
-            vf=["scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"] if vertical else []
-            vf.append(f"drawtext=text='GTA 6 - PART {i+1}':fontcolor=white:fontsize=38:x=(w-text_w)/2:y=40:box=1:boxcolor=black@0.65:boxborderw=12")
+            vf=["scale=480:854:force_original_aspect_ratio=increase,crop=480:854"] if vertical else []
+            # Text overlay disabled for Windows rendering compatibility.
             args=["ffmpeg","-hide_banner","-loglevel","error","-y","-ss",str(i*clip_seconds),"-i",str(source)]
             if narration: args+=["-i",str(audio)]
             args+=["-t",str(segment_length),"-vf",",".join(vf),"-map","0:v:0"]
             if narration: args+=["-map","1:a:0","-af","apad"]
             else: args+=["-map","0:a?"]
-            args+=["-c:v","libx264","-preset","veryfast","-crf","25","-pix_fmt","yuv420p",
+            args+=["-threads","2","-filter_threads","1","-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p",
                    "-c:a","aac","-b:a","128k","-movflags","+faststart",str(out)]
             command(args,timeout=420)
         files.append(out)
@@ -144,7 +147,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.5"
+APP_VERSION="v1.3.6"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, preview them, and select a 30-second segment without downloading the full source where supported.")
@@ -254,6 +257,9 @@ if st.button("4. Download source and create MP4 clips",disabled=not rights or no
                 candidate=max(matches,key=lambda path:path.stat().st_size)
                 if candidate.stat().st_size>max_bytes:
                     raise RuntimeError(f"Downloaded segment exceeded the {size_mb} MB limit.")
+                saved_source=OUT/"downloaded_30s_source.mp4"
+                shutil.copy2(candidate,saved_source)
+                st.info(f"Source segment saved at: {saved_source}")
                 clips=process(candidate,info.get("title") or "GTA 6",int(minutes),narration,vertical,30 if segment_mode else 60)
             import zipfile
             zip_path=OUT/"gta6_shorts.zip"
