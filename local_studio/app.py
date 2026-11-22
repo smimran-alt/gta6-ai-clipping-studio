@@ -53,9 +53,23 @@ def search_other(query, limit, platform):
             rows.append({"title":title,"url":link,"platform":platform,"comments":None,"views":None,"duration":None})
     return rows[:limit]
 
+def search_archive(limit):
+    response=requests.get("https://archive.org/advancedsearch.php",params={
+        "q":'mediatype:movies AND (title:"gta 6" OR title:"grand theft auto vi")',
+        "fl[]":["identifier","title","downloads"],"rows":str(limit*3),"output":"json"},timeout=25)
+    response.raise_for_status()
+    rows=[]
+    for item in response.json().get("response",{}).get("docs",[]):
+        if is_gta6(item.get("title","")):
+            rows.append({"title":item["title"],"url":"https://archive.org/details/"+item["identifier"],
+                         "platform":"Internet Archive","comments":None,"views":item.get("downloads"),"duration":None})
+    return rows[:limit]
+
 def search_platform(query,limit,platform):
     if platform=="YouTube":
         return [dict(row,platform="YouTube") for row in search(query,limit)]
+    if platform=="Internet Archive":
+        return search_archive(limit)
     if platform=="All platforms":
         found=[]
         for source in ("YouTube","Twitch","Vimeo","Dailymotion","Internet Archive"):
@@ -130,7 +144,7 @@ def process(source, title, minutes, narration, vertical):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.2.0"
+APP_VERSION="v1.3.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, rank by available comments, then generate 60-second MP4 clips. No Google API key.")
@@ -146,6 +160,10 @@ if st.button("1. Find GTA 6 videos",type="primary"):
             st.success(f"Found {len(st.session_state['results'])} GTA VI-titled videos")
         except Exception as exc: st.error(f"Search unavailable: {exc}")
 rows=st.session_state.get("results",[])
+if rows:
+    from collections import Counter
+    counts=Counter(item.get("platform","YouTube") for item in rows)
+    st.write("Results by source: "+", ".join(name+": "+str(counts.get(name,0)) for name in ("YouTube","Twitch","Vimeo","Dailymotion","Internet Archive")))
 if rows:
     if st.button("2. Fetch comment counts and rank"):
         with st.spinner("Fetching public metadata (some videos may block access)..."):
