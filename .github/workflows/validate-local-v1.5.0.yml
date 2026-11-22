@@ -1,0 +1,33 @@
+name: GTA Clipping Studio v1.5.0 Validation
+on:
+  push:
+    branches: [release/v1.5.0]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python dependencies
+        run: pip install -r local_studio/requirements.txt
+      - name: Compile application and discovery modules
+        run: python -m py_compile local_studio/app.py local_studio/discovery.py
+      - name: Test search result validation without network
+        run: |
+          PYTHONPATH=local_studio python - <<'PY'
+          import discovery
+          assert discovery.gta6("GTA 6 gameplay")
+          assert discovery.gta6("Grand Theft Auto VI trailer")
+          assert not discovery.gta6("GTA V gameplay")
+          assert discovery.normalize_url("https://www.youtube.com/watch?v=abcdefghijk&t=3","YouTube")=="https://www.youtube.com/watch?v=abcdefghijk"
+          assert discovery.normalize_url("https://www.youtube.com/watch?v=bad","YouTube") is None
+          assert discovery.normalize_url("https://archive.org/details/gta-6-footage","Internet Archive")
+          assert discovery.normalize_url("https://evil.example/watch?v=abcdefghijk","YouTube") is None
+          assert discovery.normalize_url("https://www.twitch.tv/videos/123456","Twitch")
+          assert discovery.normalize_url("https://www.vimeo.com/123456","Vimeo")
+          assert discovery.normalize_url("https://www.dailymotion.com/video/x123abc","Dailymotion")
+          print("PASS: discovery title, platform URL and dedup primitives")
+          PY
