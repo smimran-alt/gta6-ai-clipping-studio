@@ -1,2 +1,3 @@
 streamlit>=1.38,<2
 yt-dlp>=2025.1
+requests>=2.31
