@@ -35,6 +35,7 @@ jobs:
           python v2/studio.py
           python v2/rank_comments.py
           python v2/licensed_discovery.py
+          python v2/commentary_chunks.py
       - name: Upload reports and finished Shorts
         if: always()
         uses: actions/upload-artifact@v4
