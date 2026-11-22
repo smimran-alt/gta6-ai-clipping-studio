@@ -1,0 +1,37 @@
+name: GTA Clipping Studio v1.4.0 Validation
+on:
+  push:
+    branches: [release/v1.4.0]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check Python syntax
+        run: python -m py_compile local_studio/app.py
+      - name: Install rendering dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -r local_studio/requirements.txt
+      - name: Test 30-second vertical render
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=10 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 30 -c:v libx264 -preset ultrafast -c:a aac -y /tmp/test_source.mp4
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          source = Path("local_studio/app.py").read_text(encoding="utf-8")
+          tree = ast.parse(source)
+          selected = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.Import, ast.ImportFrom, ast.Assign)) and (not isinstance(node, ast.Assign) or any(getattr(target, "id", "") in ("ROOT", "OUT") for target in node.targets))]
+          module = ast.Module(body=selected, type_ignores=[])
+          namespace = {"__file__": str(Path("local_studio/app.py").resolve())}
+          exec(compile(module, "local_studio/app.py", "exec"), namespace)
+          clips = namespace["process"](Path("/tmp/test_source.mp4"), "GTA 6 test", 1, False, True, 30)
+          assert len(clips)==1 and clips[0].exists()
+          assert 28 <= namespace["length"](clips[0]) <= 31
+          print("PASS", clips[0], clips[0].stat().st_size)
+          PY
