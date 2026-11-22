@@ -10,3 +10,9 @@
 6. Download the resulting ZIP. MP4 files are also in `local_output/clips/`.
 
 YouTube access and metadata are not guaranteed. No Google API key required. Video downloads may be blocked. Narration is generic rather than scene-aware, and editing does not guarantee copyright clearance. Only process footage you are authorized to download and reuse.
+
+## Version history
+
+- **v1.1.0 (2026-11-21):** Clickable Watch on YouTube links, embedded preview, availability check, fixed GTA VI title matching, and version in app heading.
+
+This is a version label on main, not a separately published GitHub Release.
