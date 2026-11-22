@@ -144,7 +144,7 @@ def process(source, title, minutes, narration, vertical):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.1"
+APP_VERSION="v1.3.2"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, rank by available comments, then generate 60-second MP4 clips. No Google API key.")
@@ -213,19 +213,33 @@ if st.button("4. Download source and create MP4 clips",disabled=not rights or no
             with tempfile.TemporaryDirectory() as tmp:
                 template=str(Path(tmp)/"source.%(ext)s")
                 height=int(quality[:-1])
-                format_rule=f"b[height<={height}][ext=mp4]/b[height<={height}]/bv*[height<={height}]+ba/bv*[height<={height}]/b[height<={height}]"
-                with yt_dlp.YoutubeDL({"format":format_rule,
-                                      "merge_output_format":"mp4","outtmpl":template,
-                                      "noplaylist":True,"max_filesize":int(size_mb)*1024*1024,
-                                      "match_filter":yt_dlp.utils.match_filter_func(f"filesize < {int(size_mb)}M")}) as ydl:
+                max_bytes=int(size_mb)*1024*1024
+                format_rule=f"b[height<={height}]/bv*[height<={height}]+ba"
+                options={"format":format_rule,"merge_output_format":"mp4",
+                         "outtmpl":template,"noplaylist":True,
+                         "max_filesize":max_bytes,"quiet":True,"no_warnings":True}
+                with yt_dlp.YoutubeDL(options) as ydl:
+                    info=ydl.extract_info(url,download=False)
+                    if not info:
+                        raise RuntimeError("Video metadata unavailable. Try another source.")
+                    selected=info.get("requested_formats") or [info]
+                    estimated=sum((part.get("filesize") or part.get("filesize_approx") or 0)
+                                  for part in selected)
+                    if estimated and estimated>max_bytes:
+                        raise RuntimeError(
+                            f"Selected {quality} source is approximately {estimated/1024/1024:.0f} MB, "
+                            f"above your {size_mb} MB limit. Choose a shorter video or increase the limit.")
                     meta=ydl.extract_info(url,download=True)
-                    if not meta:
-                        raise RuntimeError("No source video met the selected size limit.")
-                    candidate=Path(ydl.prepare_filename(meta))
-                if not candidate.exists():
-                    matches=list(Path(tmp).glob("source.*"))
-                    if not matches: raise RuntimeError("Download did not produce a video")
-                    candidate=matches[0]
+                matches=[path for path in Path(tmp).glob("source.*")
+                         if path.suffix.lower() in (".mp4",".mkv",".webm",".mov")
+                         and path.is_file()]
+                if not matches:
+                    raise RuntimeError("No video file was downloaded. This source may be restricted, "
+                                       "the requested quality unavailable, or the size limit exceeded. "
+                                       "Try a shorter video or another resolution.")
+                candidate=max(matches,key=lambda path:path.stat().st_size)
+                if candidate.stat().st_size>max_bytes:
+                    raise RuntimeError(f"Downloaded file exceeds {size_mb} MB limit.")
                 clips=process(candidate,meta.get("title") or "GTA 6",int(minutes),narration,vertical)
             import zipfile
             zip_path=OUT/"gta6_shorts.zip"
