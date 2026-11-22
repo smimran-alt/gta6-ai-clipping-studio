@@ -25,6 +25,7 @@ import engagement
 import comment_download
 import watermark_edit
 import color_grade
+import rights_pipeline
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -183,7 +184,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.8.5"
+APP_VERSION="v1.9.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -639,3 +640,102 @@ if edited_path and Path(edited_path).exists():
     st.video(edited_path)
     with open(edited_path,"rb") as file:
         st.download_button("Download edited Short MP4",data=file,file_name="edited_short.mp4",mime="video/mp4")
+
+st.divider()
+st.subheader("8. Rights-aware automatic Shorts production")
+st.caption("Process the five downloaded recommendations as five separate videos. Audio is removed unless you supply your own licensed track or narration. Risk warnings do not establish copyright clearance.")
+batch_url=st.session_state.get("selected_video_url")
+batch_items=st.session_state.get("batch_results_by_url",{}).get(batch_url,[])
+batch_files=[Path(item["file"]) for item in batch_items
+             if item.get("status")=="saved" and Path(item.get("file","")).is_file()]
+if not batch_files:
+    st.info("First run Section 3: Analyze comments, then Download all recommended 30-second clips. Successful clips appear here automatically.")
+else:
+    st.write(f"**Ready:** {len(batch_files)} separate source clips from the selected video")
+    st.caption("If fewer than five downloaded, the remaining segments failed in Section 3. This editor will not invent missing clips.")
+    st.dataframe([{"clip":i+1,"file":p.name,"seconds":round(rights_pipeline.probe(p)["duration"],1)}
+                  for i,p in enumerate(batch_files)],hide_index=True,use_container_width=True)
+    if st.button("Scan downloaded clips for copyright and watermark risk",key="risk_scan"):
+        with st.spinner("Inspecting audio, repeated frames and static corners..."):
+            reports=[]
+            for p in batch_files:
+                try:reports.append(rights_pipeline.scan(p))
+                except Exception as exc:reports.append({"source":str(p),"error":str(exc)})
+            st.session_state["rights_scan_report"]=reports
+    reports=st.session_state.get("rights_scan_report")
+    if reports:
+        for report in reports:
+            with st.expander(Path(report["source"]).name):
+                if report.get("error"):st.error(report["error"])
+                else:
+                    st.write("Audio detected:",report["has_audio"])
+                    st.write("Similar frames within source:",len(report["repeated_frames"]))
+                    st.write("Possible static corner overlays:",report["watermark_review"].get("corners",[]))
+                    for warning in report["warnings"]:st.caption("⚠ "+warning)
+    st.markdown("#### Editing and replacement audio")
+    look=st.selectbox("Colour grading",list(rights_pipeline.LOOKS),key="rights_look")
+    music=st.file_uploader("Optional licensed music track (MP3/WAV/M4A/FLAC)",type=["mp3","wav","m4a","aac","ogg","flac"],key="licensed_music")
+    music_rights=st.checkbox("I have a valid license or permission to use this uploaded music in these videos",key="music_rights")
+    narration_mode=st.selectbox("Original commentary",["None","Generate from my scene notes (offline template)","Generate with OpenAI from my scene notes"],key="narration_mode")
+    scene_notes=st.text_area("Scene notes for the selected video's moments",key="rights_notes",
+                             placeholder="Describe what actually happens; the system does not visually understand the footage.")
+    ai_key=st.text_input("Optional OpenAI API key",type="password",key="rights_ai_key") if narration_mode.endswith("OpenAI from my scene notes") else ""
+    voice=st.checkbox("Speak the commentary using local text-to-speech (pyttsx3 required)",value=False,key="rights_voice")
+    captions=st.checkbox("Automatically transcribe spoken audio into subtitles (faster-whisper required)",value=False,key="rights_captions")
+    fade=st.checkbox("Add subtle fade-in/fade-out transitions",value=True,key="rights_fade")
+    vertical=st.checkbox("Export vertical 9:16",value=True,key="rights_vertical")
+    allow=st.checkbox("I have rights to edit and publish the selected video footage",key="rights_video_confirmation")
+    if st.button("Produce all available 30-second Shorts",type="primary",disabled=not allow,key="rights_produce"):
+        if music and not music_rights:
+            st.error("Confirm music usage rights or remove the music file.")
+        elif narration_mode!="None" and not scene_notes.strip():
+            st.error("Enter factual scene notes for original commentary.")
+        elif narration_mode.endswith("OpenAI from my scene notes") and not ai_key:
+            st.error("Enter an API key or choose offline commentary.")
+        else:
+            folder=OUT/"produced_shorts"
+            folder.mkdir(parents=True,exist_ok=True)
+            music_path=None
+            if music:
+                music_path=folder/("licensed_music"+Path(music.name).suffix.lower())
+                with music_path.open("wb") as dest:shutil.copyfileobj(music,dest)
+            produced=[]
+            bar=st.progress(0,text="Preparing...")
+            for i,source in enumerate(batch_files,1):
+                bar.progress((i-1)/len(batch_files),text=f"Producing Short {i} of {len(batch_files)}...")
+                entry={"clip":i,"source":source.name}
+                try:
+                    subtitle_path=None
+                    if captions:
+                        subtitle_path=folder/f"clip_{i:02d}.srt"
+                        count=rights_pipeline.subtitles_for_segment(source,subtitle_path)
+                        if count==0:subtitle_path=None
+                    voice_path=None
+                    if voice and narration_mode!="None":
+                        script=editor.commentary(scene_notes,"",ai_key if narration_mode.startswith("Generate with OpenAI") else None)
+                        voice_path=editor.synthesize(script,folder/f"narration_{i:02d}.wav")
+                    output=folder/f"short_{i:02d}.mp4"
+                    rights_pipeline.render(source,output,look=look,licensed_music=music_path,
+                                           voice=voice_path,srt=subtitle_path,fade=fade,vertical=vertical)
+                    entry.update({"status":"saved","file":str(output)})
+                except Exception as exc:
+                    entry.update({"status":"failed","error":str(exc)[:350]})
+                produced.append(entry)
+            bar.progress(1.0,text="Production complete")
+            st.session_state["produced_short_results"]=produced
+            successes=[p for p in produced if p.get("status")=="saved"]
+            if successes:
+                bundle=folder/"produced_shorts.zip"
+                with zipfile.ZipFile(bundle,"w",compression=zipfile.ZIP_DEFLATED) as archive:
+                    for item in successes:archive.write(item["file"],arcname=Path(item["file"]).name)
+                    archive.writestr("production_report.json",json.dumps(produced,indent=2))
+                st.session_state["produced_short_zip"]=str(bundle)
+                st.success(f"Produced {len(successes)} separate MP4 files out of {len(batch_files)} available sources.")
+            if len(successes)!=len(batch_files):st.warning("Some exports failed; see the detailed results below.")
+    produced=st.session_state.get("produced_short_results",[])
+    if produced:
+        st.dataframe(produced,hide_index=True,use_container_width=True)
+        bundle=st.session_state.get("produced_short_zip")
+        if bundle and Path(bundle).is_file():
+            with open(bundle,"rb") as file:
+                st.download_button("Download produced Shorts ZIP",data=file,file_name="produced_shorts.zip",mime="application/zip")
