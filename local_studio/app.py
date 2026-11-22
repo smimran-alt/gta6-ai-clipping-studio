@@ -118,7 +118,9 @@ if rows:
             st.session_state["results"]=enrich(rows)
             rows=st.session_state["results"]
     st.dataframe([{"title":r["title"],"comments":r["comments"],"views":r["views"],
-                   "duration_seconds":r["duration"],"url":r["url"]} for r in rows],
+                   "duration_seconds":r["duration"],"Watch on YouTube":r["url"],"url":r["url"]} for r in rows],
+                 column_config={"Watch on YouTube":st.column_config.LinkColumn("Watch on YouTube",display_text="▶ Watch video",help="Open this video directly on YouTube"),
+                                "url":st.column_config.TextColumn("url")},
                  use_container_width=True,hide_index=True)
     selected=st.selectbox("Choose video",list(range(len(rows))),
                           format_func=lambda i:rows[i]["title"][:105])
