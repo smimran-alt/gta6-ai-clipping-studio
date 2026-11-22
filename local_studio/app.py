@@ -98,8 +98,9 @@ def process(source, title, minutes, narration, vertical):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-st.set_page_config(page_title="GTA 6 AI Clipping Studio - Local",page_icon="🎬",layout="wide")
-st.title("🎬 GTA 6 Clipping Studio — Local")
+APP_VERSION="v1.1.0"
+st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
+st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, rank by available comments, then generate 60-second MP4 clips. No Google API key.")
 if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
     st.error("FFmpeg and ffprobe are not installed or not in PATH. Install FFmpeg before processing.")
