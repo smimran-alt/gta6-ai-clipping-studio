@@ -15,7 +15,7 @@ DOMAINS={"YouTube":("youtube.com","youtu.be"),"Twitch":("twitch.tv",),
          "Vimeo":("vimeo.com",),"Dailymotion":("dailymotion.com","dai.ly"),
          "Internet Archive":("archive.org",)}
 UA={"User-Agent":"Mozilla/5.0 (compatible; GTAClippingStudio/1.5)"}
-GTA6=re.compile(r"(?i)\\b(?:gta\\s*(?:6|vi)|grand theft auto\\s*(?:6|vi))\\b")
+GTA6=re.compile(r"(?i)\b(?:gta\s*(?:6|vi)|grand theft auto\s*(?:6|vi))\b")
 
 def gta6(text):
     return bool(GTA6.search(text or ""))
@@ -47,12 +47,12 @@ def normalize_url(url,platform):
         return "https://archive.org/details/"+m.group(1) if m else None
     if platform=="Twitch":
         # Search results must be a VOD, clip, or channel video; channel homepages are not video previews.
-        if not (re.match(r"^/videos/\\d+",parsed.path) or
+        if not (re.match(r"^/videos/\d+",parsed.path) or
                 re.match(r"^/[^/]+/clip/[^/]+",parsed.path) or
                 re.match(r"^/[^/]+/videos(?:/|$)",parsed.path) or
                 parsed.hostname=="clips.twitch.tv"):
             return None
-    if platform=="Vimeo" and not re.match(r"^/(?:\\d+|channels/[^/]+/\\d+|groups/[^/]+/videos/\\d+)",parsed.path):
+    if platform=="Vimeo" and not re.match(r"^/(?:\d+|channels/[^/]+/\d+|groups/[^/]+/videos/\d+)",parsed.path):
         return None
     if platform=="Dailymotion" and not (re.match(r"^/video/[A-Za-z0-9]+",parsed.path) or parsed.hostname=="dai.ly"):
         return None
@@ -145,9 +145,9 @@ def embed_url(url,platform):
     """Only use embeds with known safe video IDs; otherwise show external watch link."""
     if platform=="YouTube": return url
     if platform=="Vimeo":
-        match=re.search(r"/(\\d+)(?:$|[/?])",url)
+        match=re.search(r"/(\d+)(?:$|[/?])",url)
         if match: return "https://player.vimeo.com/video/"+match.group(1)
     if platform=="Dailymotion":
-        match=re.search(r"(?:/video/|dai\\.ly/)([A-Za-z0-9]+)",url)
+        match=re.search(r"(?:/video/|dai\.ly/)([A-Za-z0-9]+)",url)
         if match: return "https://www.dailymotion.com/embed/video/"+match.group(1)
     return None
