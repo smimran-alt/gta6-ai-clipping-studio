@@ -1,0 +1,36 @@
+name: GTA Clipping Studio v1.7.0 Validation
+on:
+  push:
+    branches: [release/v1.7.0]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install FFmpeg and base requirements
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install -r local_studio/requirements.txt
+      - name: Compile Python
+        run: python -m py_compile local_studio/app.py local_studio/discovery.py local_studio/highlights.py local_studio/editor.py
+      - name: Test captions and local 30-second edit
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=5 -f lavfi -i sine=frequency=500:sample_rate=8000 -t 32 -c:v libx264 -preset ultrafast -c:a aac -y /tmp/source.mp4
+          PYTHONPATH=local_studio python - <<'PY'
+          from pathlib import Path
+          import editor
+          assert editor.timestamp(61.5)=="00:01:01,500"
+          srt=Path("/tmp/captions.srt")
+          assert editor.write_srt([{"start":0,"end":2,"text":"Hello gameplay"}],srt)==1
+          assert "Hello gameplay" in srt.read_text(encoding="utf-8-sig")
+          output=editor.edit("/tmp/source.mp4","/tmp/edited.mp4",start=1,seconds=30,vertical=True)
+          assert output.exists() and output.stat().st_size>1024
+          assert 27<=editor.duration(output)<=31
+          print("PASS: captions SRT and 30-second vertical MP4")
+          PY
