@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import streamlit as st
 import yt_dlp
 import discovery
+import highlights
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -177,10 +178,10 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.5.0"
+APP_VERSION="v1.6.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
-st.caption("Discover GTA 6 videos across YouTube, Twitch, Vimeo, Dailymotion and Internet Archive; preview where supported, verify source links, and clip authorized footage.")
+st.caption("Find GTA 6 footage, analyze scene changes and audio locally, and export recommended 30-second highlights.")
 st.info(f"Output folder: {OUT}")
 if st.button("Open output folder on this computer"):
     try:
@@ -352,3 +353,69 @@ if sources:
             st.download_button(f"Download preserved source ({src.suffix})",data=file,file_name=src.name,
                                mime="video/mp4" if src.suffix==".mp4" else "application/octet-stream",
                                key="source_"+src.suffix)
+
+st.divider()
+st.subheader("6. Automatic 30-second highlight recommendations")
+st.caption("Analyzes local video files only. Detects scene changes and soundtrack energy, not specific gameplay events. Results are suggestions, not guaranteed viral moments.")
+st.info("For meaningful recommendations, use a source longer than 30 seconds. A 30-second downloaded segment only has one possible 30-second highlight.")
+uploaded=st.file_uploader("Optional: add a local video you have permission to edit",type=["mp4","mkv","webm","mov"],key="highlight_upload")
+if uploaded is not None and st.button("Save uploaded video for analysis"):
+    upload_dir=OUT/"analysis_sources"
+    upload_dir.mkdir(parents=True,exist_ok=True)
+    # Never trust client-supplied filenames as filesystem paths.
+    ext=Path(uploaded.name).suffix.lower()
+    target=upload_dir/("uploaded_source"+ext)
+    with target.open("wb") as destination:
+        shutil.copyfileobj(uploaded,destination)
+    st.success(f"Saved {target}")
+available_sources=[]
+for directory in (OUT,OUT/"analysis_sources"):
+    if directory.exists():
+        available_sources.extend(path for path in directory.iterdir()
+                                 if path.is_file() and path.suffix.lower() in (".mp4",".mkv",".webm",".mov"))
+available_sources=sorted(set(available_sources),key=lambda item:item.name.lower())
+if available_sources:
+    selected_source=st.selectbox("Choose saved source for highlight analysis",available_sources,
+                                 format_func=lambda path:f"{path.name} ({path.stat().st_size/1024/1024:.1f} MB)")
+    suggestions=st.slider("Number of recommended highlights",1,10,5,key="highlight_count")
+    if st.button("Analyze video and recommend 30-second highlights",type="primary"):
+        with st.spinner("Analyzing local scene changes and audio; long videos may take several minutes..."):
+            try:
+                report=highlights.analyze(selected_source,count=suggestions)
+                st.session_state["highlight_report"]=report
+                st.success(f"Analyzed {report['analyzed_seconds']:.0f} seconds. Found {len(report['recommendations'])} recommendations.")
+            except Exception as exc:
+                st.error(f"Highlight analysis failed: {exc}")
+else:
+    st.info("No source video found. Download an authorized segment above or upload your own longer gameplay video.")
+report=st.session_state.get("highlight_report")
+if report and Path(report["source"]).exists():
+    st.caption(f"Source: {Path(report['source']).name} | Method: {report['method']} | {report['audio_status']}")
+    st.caption("Scores reflect motion/cuts and loudness only; they do not identify explosions, police chases or actual viewer engagement.")
+    recs=report["recommendations"]
+    if recs:
+        st.dataframe([{"rank":i+1,"start_seconds":item["start"],"end_seconds":item["end"],
+                       "highlight_score":item["score"],"scene_changes":item["scene_changes"],
+                       "audio_level":item["average_audio"]} for i,item in enumerate(recs)],
+                     use_container_width=True,hide_index=True)
+        rank=st.selectbox("Select recommended highlight",list(range(len(recs))),
+                          format_func=lambda i:f"#{i+1} — {recs[i]['start']}s to {recs[i]['end']}s | Score {recs[i]['score']}")
+        chosen=recs[rank]
+        st.caption(f"Selected time: {int(chosen['start'])//60:02d}:{int(chosen['start'])%60:02d}–{int(chosen['end'])//60:02d}:{int(chosen['end'])%60:02d}")
+        st.video(str(report["source"]),start_time=int(chosen["start"]))
+        make_vertical=st.checkbox("Export recommended highlight as vertical 9:16",value=True,key="highlight_vertical")
+        if st.button("Export selected 30-second highlight"):
+            with st.spinner("Rendering and verifying recommended clip..."):
+                try:
+                    out=OUT/"highlights"/f"highlight_{rank+1:02d}_{int(chosen['start']):05d}s.mp4"
+                    highlights.export_clip(report["source"],chosen["start"],out,vertical=make_vertical)
+                    st.session_state["last_highlight_export"]=str(out)
+                    st.success(f"Saved verified clip: {out}")
+                except Exception as exc:
+                    st.error(f"Highlight export failed: {exc}")
+last_export=st.session_state.get("last_highlight_export")
+if last_export and Path(last_export).exists():
+    st.video(last_export)
+    with open(last_export,"rb") as file:
+        st.download_button("Download recommended 30-second MP4",data=file,
+                           file_name=Path(last_export).name,mime="video/mp4")
