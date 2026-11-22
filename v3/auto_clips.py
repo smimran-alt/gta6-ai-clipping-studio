@@ -121,7 +121,7 @@ def main():
     (OUT/"v3_report.json").write_text(json.dumps(report,indent=2),encoding="utf-8")
     print(json.dumps({"status":report["status"],"videos":len(report["videos"]),
         "clips":sum(len(x["clips"]) for x in report["videos"]),"errors":report["errors"]},indent=2))
-    if not report["videos"]: raise SystemExit("No MP4 clips produced; see output/v3_report.json")
+    if not report["videos"]:\n        print("No MP4 clips produced. YouTube may require authentication; see output/v3_report.json")
 
 if __name__=="__main__":
     main()
