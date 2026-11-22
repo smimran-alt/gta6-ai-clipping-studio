@@ -1,0 +1,42 @@
+name: GTA Clipping Studio v1.9.0 Validation
+on:
+  push:
+    branches: [release/v1.9.0]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install FFmpeg and dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install -r local_studio/requirements.txt
+      - name: Compile all modules
+        run: python -m py_compile local_studio/app.py local_studio/rights_pipeline.py local_studio/editor.py local_studio/comment_download.py local_studio/color_grade.py
+      - name: Create test source and licensed synthetic audio
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x180:rate=5 -f lavfi -i sine=frequency=600:sample_rate=8000 -t 31 -c:v libx264 -preset ultrafast -c:a aac -y /tmp/clip.mp4
+          ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=200:sample_rate=8000 -t 31 -y /tmp/music.wav
+      - name: Test rights scanner and video/audio pipeline
+        run: |
+          PYTHONPATH=local_studio python - <<'PY'
+          from pathlib import Path
+          import rights_pipeline as p
+          report=p.scan("/tmp/clip.mp4")
+          assert report["has_audio"] is True
+          assert report["warnings"]
+          out=p.render("/tmp/clip.mp4","/tmp/short.mp4",look="Natural",licensed_music="/tmp/music.wav")
+          assert out.exists() and out.stat().st_size>1024
+          result=p.probe(out)
+          assert result["audio"] and result["video"]
+          assert 28<=result["duration"]<=31
+          muted=p.render("/tmp/clip.mp4","/tmp/muted.mp4",look="Cool")
+          assert p.probe(muted)["audio"] is False
+          print("PASS: heuristic scanner, licensed audio replacement, silent export")
+          PY
