@@ -3,6 +3,11 @@ Run: streamlit run local_studio/app.py
 Requires ffmpeg/ffprobe in PATH. Video download is opt-in and requires rights confirmation.
 """
 import csv
+import os
+import sys
+import time
+import zipfile
+import datetime
 import json
 import re
 import shutil
@@ -110,7 +115,7 @@ def length(path):
 def process(source, title, minutes, narration, vertical, clip_seconds=60):
     folder=OUT/"clips"
     folder.mkdir(parents=True,exist_ok=True)
-    for old in folder.glob("clip_*.mp4"): old.unlink()
+    # Keep previous successful exports; only replace the current clip after validation.
     duration=length(source)
     count=min((int(duration+clip_seconds-0.001)//clip_seconds),minutes)
     if count==0: raise RuntimeError("Video is shorter than one second")
@@ -118,6 +123,8 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     for i in range(count):
         segment_length=min(clip_seconds,duration-i*clip_seconds)
         out=folder/f"clip_{i+1:03d}.mp4"
+        pending=folder/f"clip_{i+1:03d}.pending.mp4"
+        if pending.exists(): pending.unlink()
         with tempfile.TemporaryDirectory() as tmp:
             audio=Path(tmp)/"voice.wav"
             if narration:
@@ -139,18 +146,48 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
             if narration: args+=["-map","1:a:0","-af","apad"]
             else: args+=["-map","0:a?"]
             args+=["-threads","2","-filter_threads","1","-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p",
-                   "-c:a","aac","-b:a","128k","-movflags","+faststart",str(out)]
-            command(args,timeout=420)
+                   "-c:a","aac","-b:a","128k","-movflags","+faststart",str(pending)]
+            try:
+                command(args,timeout=420)
+            except Exception as exc:
+                if pending.exists(): pending.unlink()
+                if vertical:
+                    # Some Windows FFmpeg builds crash on crop/scale. Try a simpler, uncropped encode.
+                    fallback=["ffmpeg","-hide_banner","-loglevel","error","-y",
+                              "-ss",str(i*clip_seconds),"-i",str(source),"-t",str(segment_length),
+                              "-map","0:v:0","-map","0:a?","-c:v","libx264","-threads","1",
+                              "-preset","ultrafast","-crf","28","-pix_fmt","yuv420p",
+                              "-c:a","aac","-b:a","128k","-movflags","+faststart",str(pending)]
+                    try:
+                        command(fallback,timeout=420)
+                    except Exception as fallback_exc:
+                        raise RuntimeError(f"Vertical render failed: {exc}; fallback render failed: {fallback_exc}") from fallback_exc
+                else:
+                    raise
+            if not pending.exists() or pending.stat().st_size<1024:
+                raise RuntimeError("FFmpeg returned without creating a usable MP4.")
+            verified=length(pending)
+            if verified<1 or abs(verified-segment_length)>3:
+                raise RuntimeError(f"Output validation failed: expected {segment_length:.1f}s, got {verified:.1f}s.")
+            os.replace(pending,out)
         files.append(out)
     manifest={"source":title,"source_duration":duration,"clips":[x.name for x in files],
               "commentary":"Generic original voice, not scene-aware; review before publication"}
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.6"
+APP_VERSION="v1.4.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
-st.caption("Find GTA VI videos, preview them, and select a 30-second segment without downloading the full source where supported.")
+st.caption("Preview, select a 30-second segment, preserve the source, validate MP4 exports, and download results.")
+st.info(f"Output folder: {OUT}")
+if st.button("Open output folder on this computer"):
+    try:
+        if os.name=="nt": os.startfile(str(OUT))
+        elif sys.platform=="darwin": subprocess.Popen(["open",str(OUT)])
+        else: subprocess.Popen(["xdg-open",str(OUT)])
+    except Exception as exc: st.error(f"Could not open folder: {exc}")
+
 if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
     st.error("FFmpeg and ffprobe are not installed or not in PATH. Install FFmpeg before processing.")
 platform=st.selectbox("Search platform",["All platforms","YouTube","Twitch","Vimeo","Dailymotion","Internet Archive"])
@@ -183,6 +220,7 @@ if rows:
     st.markdown("#### Preview selected video")
     if rows[selected].get("platform","YouTube")=="YouTube":
         st.video(url)
+        st.caption("Preview is streamed from the source; use the start-time slider below to choose a segment.")
     else:
         st.info("Preview may be restricted on this platform. Open the source website.")
     st.link_button("Open video on source website",url)
@@ -257,21 +295,44 @@ if st.button("4. Download source and create MP4 clips",disabled=not rights or no
                 candidate=max(matches,key=lambda path:path.stat().st_size)
                 if candidate.stat().st_size>max_bytes:
                     raise RuntimeError(f"Downloaded segment exceeded the {size_mb} MB limit.")
-                saved_source=OUT/"downloaded_30s_source.mp4"
+                saved_source=OUT/("downloaded_30s_source"+candidate.suffix.lower())
                 shutil.copy2(candidate,saved_source)
                 st.info(f"Source segment saved at: {saved_source}")
-                clips=process(candidate,info.get("title") or "GTA 6",int(minutes),narration,vertical,30 if segment_mode else 60)
-            import zipfile
+                st.session_state["saved_source"]=str(saved_source)
+                st.session_state["last_source_url"]=url
+                st.info("Download completed. Rendering and verifying the clip now...")
+                clips=process(saved_source,info.get("title") or "GTA 6",int(minutes),narration,vertical,30 if segment_mode else 60)
             zip_path=OUT/"gta6_shorts.zip"
             with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
                 for clip in clips: archive.write(clip,arcname=clip.name)
                 archive.write(OUT/"clips"/"manifest.json",arcname="manifest.json")
-            st.success(f"Created {len(clips)} playable MP4 clips.")
+            st.success(f"Created and verified {len(clips)} MP4 clip(s). Files are in {OUT / 'clips'}")
+            st.session_state["clip_paths"]=[str(x) for x in clips]
             st.session_state["zip_path"]=str(zip_path)
         except Exception as exc:
             st.error(f"Processing failed: {exc}")
+            st.warning("If downloading completed, check local_output for downloaded_30s_source.mp4 (or another source extension). The source is preserved for retry.")
 if st.session_state.get("zip_path") and Path(st.session_state["zip_path"]).exists():
     with open(st.session_state["zip_path"],"rb") as f:
         st.download_button("Download all GTA 6 clips (ZIP)",data=f,
                            file_name="gta6_shorts.zip",mime="application/zip")
 st.caption("Non-YouTube discovery uses public web search; availability is not guaranteed. Search metadata can be incomplete; downloads may be blocked. Voice commentary is generic and not based on AI visual understanding.")
+
+st.divider()
+st.subheader("5. Preview and download saved files")
+saved=sorted((OUT/"clips").glob("clip_*.mp4")) if (OUT/"clips").exists() else []
+for clip in saved:
+    if clip.stat().st_size<1024: continue
+    st.write(f"**{clip.name}** — {clip.stat().st_size/1024/1024:.1f} MB")
+    st.video(str(clip))
+    with clip.open("rb") as file:
+        st.download_button(f"Download {clip.name}",data=file,file_name=clip.name,mime="video/mp4",key="dl_"+clip.name)
+sources=sorted(OUT.glob("downloaded_30s_source.*"))
+if sources:
+    st.caption("Preserved source segment:")
+    for src in sources:
+        st.write(f"{src.name} — {src.stat().st_size/1024/1024:.1f} MB")
+        with src.open("rb") as file:
+            st.download_button(f"Download preserved source ({src.suffix})",data=file,file_name=src.name,
+                               mime="video/mp4" if src.suffix==".mp4" else "application/octet-stream",
+                               key="source_"+src.suffix)
