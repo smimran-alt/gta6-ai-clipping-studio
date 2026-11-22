@@ -181,7 +181,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.8.2"
+APP_VERSION="v1.8.3"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -306,32 +306,24 @@ if rows:
                                  type="primary",key="batch_download_"+url):
                         batch_dir=OUT/"most_discussed"/"batch"
                         batch_dir.mkdir(parents=True,exist_ok=True)
-                        batch_results=[]
-                        progress=st.progress(0,text="Preparing recommended clips...")
-                        for index,entry in enumerate(moments):
-                            progress.progress((index)/len(moments),
-                                              text=f"Downloading clip {index+1} of {len(moments)}...")
-                            try:
-                                saved=comment_download.download_range(url,entry["start"],batch_dir)
-                                batch_results.append({"start":entry["start"],"end":entry["end"],
-                                                      "timestamp_mentions":entry["timestamped_comments"],
-                                                      "status":"saved","file":str(saved)})
-                            except Exception as exc:
-                                batch_results.append({"start":entry["start"],"end":entry["end"],
-                                                      "timestamp_mentions":entry["timestamped_comments"],
-                                                      "status":"failed","error":str(exc)[:300]})
-                        progress.progress(1.0,text="Batch complete")
+                        with st.spinner(f"Downloading and verifying {len(moments)} separate clips..."):
+                            batch_results=comment_download.download_batch(url,moments,batch_dir)
                         st.session_state["batch_results_by_url"]=st.session_state.get("batch_results_by_url",{})
                         st.session_state["batch_results_by_url"][url]=batch_results
                         completed=[item for item in batch_results if item["status"]=="saved"]
                         if completed:
-                            zip_path=OUT/"most_discussed"/"recommended_clips.zip"
+                            from urllib.parse import parse_qs,urlparse
+                            video_id=parse_qs(urlparse(url).query).get("v",["selected_video"])[0]
+                            zip_path=OUT/"most_discussed"/f"recommended_clips_{video_id}.zip"
                             with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
                                 for item in completed:
                                     archive.write(item["file"],arcname=Path(item["file"]).name)
+                                archive.writestr("download_status.json",json.dumps(batch_results,indent=2))
                             st.session_state["batch_zip_by_url"]=st.session_state.get("batch_zip_by_url",{})
                             st.session_state["batch_zip_by_url"][url]=str(zip_path)
-                            st.success(f"Saved {len(completed)} of {len(batch_results)} recommended clips.")
+                            st.success(f"Saved {len(completed)} of {len(batch_results)} separate MP4 clips.")
+                            if len(completed)<len(batch_results):
+                                st.warning(f"{len(batch_results)-len(completed)} clips failed. See the status table below for individual errors.")
                         else:
                             st.error("No recommended clips downloaded successfully. The host may block partial downloads.")
                     batch_result=st.session_state.get("batch_results_by_url",{}).get(url)
@@ -341,7 +333,7 @@ if rows:
                         if zip_for_video and Path(zip_for_video).exists():
                             with open(zip_for_video,"rb") as bundle:
                                 st.download_button("Download all successful clips (ZIP)",data=bundle,
-                                                   file_name="recommended_clips.zip",mime="application/zip",
+                                                   file_name=Path(zip_for_video).name,mime="application/zip",
                                                    key="batch_zip_"+url)
                     choice=st.selectbox("Choose a 30-second discussion window",
                                         list(range(len(moments))),
