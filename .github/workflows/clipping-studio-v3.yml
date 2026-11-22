@@ -1,0 +1,42 @@
+name: GTA Clipping Studio v3 - MP4 Shorts
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "29 15 * * *"
+permissions:
+  contents: read
+jobs:
+  create-gta-shorts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install video tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          python -m pip install --upgrade requests yt-dlp
+      - name: Find GTA videos and rank by public comments
+        run: |
+          python v2/studio.py
+          python v2/rank_comments.py
+        env:
+          MAKE_CLIPS: "false"
+      - name: Download GTA gameplay and create narrated 60-second MP4 clips
+        env:
+          V3_MAX_MINUTES: "30"
+        run: python v3/auto_clips.py
+      - name: Upload downloadable MP4s and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta-v3-downloadable-clips
+          path: |
+            output/v3_clips/
+            output/v3_report.json
+            output/ranked_by_comments.csv
+          if-no-files-found: warn
+          retention-days: 7
