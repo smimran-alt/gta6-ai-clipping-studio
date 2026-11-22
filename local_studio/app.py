@@ -21,6 +21,8 @@ import yt_dlp
 import discovery
 import highlights
 import editor
+import engagement
+import comment_download
 
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/"local_output"
@@ -179,10 +181,10 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.7.0"
+APP_VERSION="v1.8.0"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
-st.caption("Discover gameplay, recommend highlights, create captions and commentary, and edit Shorts locally.")
+st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
 st.info(f"Output folder: {OUT}")
 if st.button("Open output folder on this computer"):
     try:
@@ -257,6 +259,71 @@ if rows:
 
 else:
     url=st.text_input("Or paste a direct video URL (only footage you can lawfully use)")
+st.divider()
+st.subheader("3. Find the most-discussed 30-second moments automatically")
+st.caption("No link needed. Searches use the GTA 6 results above. Video-level comment totals rank candidates; timestamped public comments suggest 30-second windows. Counts are sampled, not total comments per segment.")
+if rows:
+    max_videos=st.slider("Videos to check for comments",1,min(10,len(rows)),min(3,len(rows)),key="comment_scan_count")
+    if st.button("Analyze most-discussed GTA 6 moments automatically",type="primary",key="auto_comment_analyze"):
+        with st.spinner("Fetching engagement and sampling public timestamped comments. Some platforms may restrict comments..."):
+            candidates=[item for item in rows if item.get("platform","YouTube")=="YouTube"]
+            if not candidates:
+                st.warning("No YouTube results found. Other platforms currently provide video-level metadata only; timestamped comment analysis is unavailable.")
+            else:
+                checked=[]
+                for item in candidates[:max_videos]:
+                    try:
+                        detail=engagement.fetch_youtube_comments(item["url"])
+                        checked.append({"url":item["url"],"title":item["title"],"detail":detail,"error":None})
+                    except Exception as exc:
+                        checked.append({"url":item["url"],"title":item["title"],"detail":None,"error":str(exc)[:350]})
+                checked.sort(key=lambda x:(not bool(x["detail"] and x["detail"]["moments"]),
+                                           -max((m["timestamped_comments"] for m in (x["detail"] or {}).get("moments",[])),default=0),
+                                           -((x["detail"] or {}).get("comment_count") or 0)))
+                st.session_state["comment_analysis"]=checked
+    reports=st.session_state.get("comment_analysis",[])
+    if reports:
+        for i,item in enumerate(reports):
+            detail=item["detail"]
+            with st.expander(f"{i+1}. {item['title'][:100]}",expanded=i==0):
+                st.link_button("Watch source video",item["url"])
+                if item["error"]:
+                    st.warning("Comment analysis unavailable: "+item["error"])
+                    continue
+                st.write(f"Video comments (reported): {detail.get('comment_count') if detail.get('comment_count') is not None else 'Unknown'} | Public comments scanned: {detail['comments_scanned']} | Comments containing timestamps: {detail['timestamped_comment_count']}")
+                st.caption(detail["status"])
+                if not detail["moments"]:
+                    st.info("No timestamped comments found in the accessible sample. This is not evidence that no one discussed particular moments. Use section 6 scene/audio highlight detection instead.")
+                    continue
+                st.dataframe([{"start":f"{m['start']//60:02d}:{m['start']%60:02d}",
+                               "end":f"{m['end']//60:02d}:{m['end']%60:02d}",
+                               "sampled_timestamped_comments":m["timestamped_comments"]}
+                              for m in detail["moments"]],hide_index=True,use_container_width=True)
+                choice=st.selectbox("Choose a 30-second discussion window",
+                                    list(range(len(detail["moments"]))),
+                                    format_func=lambda j:f"{detail['moments'][j]['start']}–{detail['moments'][j]['end']}s | {detail['moments'][j]['timestamped_comments']} timestamp mentions",
+                                    key=f"comment_choice_{i}")
+                moment=detail["moments"][choice]
+                st.video(item["url"],start_time=int(moment["start"]))
+                st.caption("Timestamp mentions refer to moments in the source video. They are not actual per-segment YouTube comment counts.")
+                permission=st.checkbox("I have permission to download and reuse this footage",key=f"comment_rights_{i}")
+                if st.button("Download this recommended 30-second segment",disabled=not permission,key=f"comment_download_{i}"):
+                    with st.spinner("Downloading only the selected interval where supported..."):
+                        try:
+                            result=comment_download.download_range(item["url"],moment["start"],OUT/"most_discussed")
+                            st.session_state["most_discussed_download"]=str(result)
+                            st.success(f"Saved and validated: {result}")
+                        except Exception as exc:
+                            st.error(f"Download unavailable: {exc}")
+    downloaded=st.session_state.get("most_discussed_download")
+    if downloaded and Path(downloaded).exists():
+        st.video(downloaded)
+        with open(downloaded,"rb") as source_file:
+            st.download_button("Download most-discussed clip MP4",data=source_file,
+                               file_name=Path(downloaded).name,mime="video/mp4",key="comment_mp4_download")
+else:
+    st.info("Click Find GTA 6 videos first. The studio will discover URLs automatically.")
+
 st.subheader("3. Generate clips")
 st.warning("You must have permission to download and reuse the video. Commentary does not guarantee copyright clearance.")
 rights=st.checkbox("I have the rights or permission needed to download and reuse this footage")
