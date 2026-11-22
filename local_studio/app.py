@@ -144,7 +144,7 @@ def process(source, title, minutes, narration, vertical):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.3.0"
+APP_VERSION="v1.3.1"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Find GTA VI videos, rank by available comments, then generate 60-second MP4 clips. No Google API key.")
@@ -204,15 +204,23 @@ rights=st.checkbox("I have the rights or permission needed to download and reuse
 minutes=st.number_input("Maximum clips (60 seconds each)",min_value=1,max_value=60,value=26)
 narration=st.checkbox("Add English computer voice commentary",value=True)
 vertical=st.checkbox("Create vertical 9:16 Shorts",value=True)
+quality=st.selectbox("Maximum download resolution",["360p","480p","720p"],index=1)
+size_mb=st.number_input("Maximum source download size (MB)",min_value=50,max_value=2000,value=500,step=50)
+st.caption("The size limit applies to the entire selected source, not just one 60-second clip. Long videos may exceed the limit even at low resolution.")
 if st.button("4. Download source and create MP4 clips",disabled=not rights or not url):
     with st.spinner("Downloading and rendering; long videos can take time..."):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 template=str(Path(tmp)/"source.%(ext)s")
-                with yt_dlp.YoutubeDL({"format":"bv*[height<=720]+ba/b[height<=720]/best",
+                height=int(quality[:-1])
+                format_rule=f"b[height<={height}][ext=mp4]/b[height<={height}]/bv*[height<={height}]+ba/bv*[height<={height}]/b[height<={height}]"
+                with yt_dlp.YoutubeDL({"format":format_rule,
                                       "merge_output_format":"mp4","outtmpl":template,
-                                      "noplaylist":True,"max_filesize":1024*1024*1024}) as ydl:
+                                      "noplaylist":True,"max_filesize":int(size_mb)*1024*1024,
+                                      "match_filter":yt_dlp.utils.match_filter_func(f"filesize < {int(size_mb)}M")}) as ydl:
                     meta=ydl.extract_info(url,download=True)
+                    if not meta:
+                        raise RuntimeError("No source video met the selected size limit.")
                     candidate=Path(ydl.prepare_filename(meta))
                 if not candidate.exists():
                     matches=list(Path(tmp).glob("source.*"))
