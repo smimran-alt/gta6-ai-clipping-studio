@@ -157,3 +157,11 @@ def render(source,destination,look="Natural",licensed_music=None,voice=None,
         return destination
     finally:
         pending.unlink(missing_ok=True)
+
+def video_dimensions(path):
+    """Verify that exported aspect ratio matches the selected output format."""
+    data=json.loads(run(["ffprobe","-v","error","-select_streams","v:0",
+                         "-show_entries","stream=width,height","-of","json",str(path)],40))
+    streams=data.get("streams",[])
+    if not streams:raise RuntimeError("Output contains no video stream")
+    return int(streams[0]["width"]),int(streams[0]["height"])
