@@ -17,6 +17,11 @@ PROMPTS={
         "Video game screenshot of a spectacular vehicle crash with cars colliding",
         "Video game screenshot of a dramatic car stunt, jump or near collision",
         "Video game screenshot of an explosion during an action-packed driving scene",
+        "Video game screenshot of a huge multi-car pileup and sparks on a highway",
+        "Video game screenshot of a car flying off a ramp during an extreme stunt",
+        "Video game screenshot of a vehicle flipping over in a spectacular collision",
+        "Video game screenshot of a dramatic high-speed near miss between vehicles",
+        "Video game screenshot of a chaotic roadblock crash during a police escape",
     ],
     "ordinary":[
         "Video game screenshot of a parked car on a quiet empty street",
@@ -35,7 +40,7 @@ def _frame(source,second):
         raise RuntimeError(result.stderr.decode("utf-8","replace")[-400:])
     return Image.open(io.BytesIO(result.stdout)).convert("RGB")
 
-def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch32",progress=None):
+def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch32",progress=None,sensational_weight=0.60):
     try:
         import torch
         from transformers import CLIPModel, CLIPProcessor
@@ -44,6 +49,8 @@ def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch3
     model=CLIPModel.from_pretrained(model_name).eval()
     processor=CLIPProcessor.from_pretrained(model_name)
     prompts=[p for group in PROMPTS.values() for p in group]
+    chase_end=len(PROMPTS["car_chase"])
+    sensational_end=chase_end+len(PROMPTS["sensational"])
     text_inputs=processor(text=prompts,return_tensors="pt",padding=True,truncation=True)
     with torch.no_grad():
         text_features=model.get_text_features(**text_inputs)
@@ -53,7 +60,7 @@ def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch3
     results=[]
     for i,item in enumerate(candidates):
         frames=[]
-        for offset in (1,5,11,18,25):
+        for offset in (0.5,2,5,9,13,17,21,25,28):
             try:frames.append(_frame(source,float(item["start"])+offset))
             except (RuntimeError,subprocess.TimeoutExpired):pass
         if not frames:
@@ -69,14 +76,14 @@ def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch3
             sims=(img_features @ text_features.T).cpu()
         # CLIP similarity is relative to the supplied prompts; softmax is NOT probability.
         probabilities=torch.softmax(sims*15,dim=1)
-        chase=float(probabilities[:,:3].sum(dim=1).mean())
-        spectacular=float(probabilities[:,3:6].sum(dim=1).mean())
-        ordinary=float(probabilities[:,6:9].sum(dim=1).mean())
+        chase=float(probabilities[:,:chase_end].sum(dim=1).mean())
+        spectacular=float(probabilities[:,chase_end:sensational_end].sum(dim=1).mean())
+        ordinary=float(probabilities[:,sensational_end:].sum(dim=1).mean())
         # 30% pursuit + 20% crashes/stunts + 15% visual action; remaining
         # 35% uses the existing hook/pacing/audio proxies. These are estimates.
         visual_action=max(chase,spectacular)
         proxy=float(item.get("score",0))/100
-        combined=round(100*(.30*chase+.20*spectacular+.15*visual_action+.35*proxy),1)
+        combined=round(100*(.70*(sensational_weight*spectacular+(1-sensational_weight)*chase)+.15*visual_action+.15*proxy),1)
         reason=("Possible pursuit / chase visuals" if chase>=spectacular else
                 "Possible dramatic crash / stunt visuals")
         results.append({**item,"chase_score":round(chase*100,1),
