@@ -185,7 +185,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.6"
+APP_VERSION="v1.9.7"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -515,7 +515,7 @@ if sources:
 st.divider()
 st.subheader("6. Viral Clip Score — 12 weighted selection criteria")
 st.caption("Uses your 100-point rubric. Current automatic assessment measures only proxies for hooks, intensity, pacing, audio and duration. Surprise, emotion, storytelling, visuals, trends, replay and sharing are explicitly unassessed, not invented.")
-st.info("For meaningful recommendations, use a source longer than 30 seconds. A 30-second downloaded segment only has one possible 30-second highlight.")
+st.info("For 60-second clips, select or upload a source of at least 60 seconds. Section 3 downloads only 30-second segments.")
 uploaded=st.file_uploader("Optional: add a local video you have permission to edit",type=["mp4","mkv","webm","mov"],key="highlight_upload")
 if uploaded is not None and st.button("Save uploaded video for analysis"):
     upload_dir=OUT/"analysis_sources"
@@ -536,19 +536,20 @@ if available_sources:
     selected_source=st.selectbox("Choose saved source for highlight analysis",available_sources,
                                  format_func=lambda path:f"{path.name} ({path.stat().st_size/1024/1024:.1f} MB)")
     suggestions=st.slider("Number of recommended highlights",1,10,5,key="highlight_count")
+    clip_seconds=st.radio("Clip length",options=[30,60],index=1,horizontal=True,key="highlight_duration")
     mode=st.radio("Highlight selection mode",["General viral moments (existing)","Car chases & sensational moments (AI)"],
                   key="highlight_selection_mode")
     if mode.endswith("(AI)"):
         sensational_weight=st.slider("Sensational moments emphasis (%)",min_value=40,max_value=90,value=70,step=5,key="sensational_emphasis")
         st.info("Optional local CLIP vision model. First use downloads model weights (~600 MB) and requires additional packages. Visual similarity is not proof of a chase, crash or explosion. Review each result.")
         st.caption("Analyzes 5 frames per candidate, sampled from the highest-motion/audio 30-second windows. Maximum 20 minutes of source footage.")
-    if st.button("Analyze video and recommend 30-second highlights",type="primary"):
+    if st.button(f"Analyze video and recommend {clip_seconds}-second highlights",type="primary"):
         with st.spinner("Analyzing local video; AI mode may take several minutes..."):
             try:
                 use_ai=mode.endswith("(AI)")
-                report=highlights.analyze(selected_source,count=max(20,suggestions) if use_ai else suggestions)
+                report=highlights.analyze(selected_source,count=max(20,suggestions) if use_ai else suggestions,clip_seconds=clip_seconds)
                 if use_ai:
-                    ranked=chase_ai.analyze_candidates(selected_source,report["recommendations"],sensational_weight=sensational_weight/100)
+                    ranked=chase_ai.analyze_candidates(selected_source,report["recommendations"],sensational_weight=sensational_weight/100,clip_seconds=clip_seconds)
                     report["recommendations"]=ranked[:suggestions]
                     report["method"]="Optional CLIP visual semantic similarity + hook/pacing/audio proxies"
                     report["limitations"]="Vision similarity is not verified event recognition. Only sampled candidate windows are considered."
@@ -562,6 +563,7 @@ else:
     st.info("No source video found. Download an authorized segment above or upload your own longer gameplay video.")
 report=st.session_state.get("highlight_report")
 if report and Path(report["source"]).exists():
+    selected_duration=int(report.get("clip_seconds",30))
     st.caption(f"Source: {Path(report['source']).name} | Method: {report['method']} | {report['audio_status']}")
     st.caption("General mode scores use assessable proxies only. AI mode uses CLIP image-text similarity, not a verified event detector or probability. The original 12-criterion rubric remains available for comparison.")
     recs=report["recommendations"]
@@ -594,16 +596,16 @@ if report and Path(report["source"]).exists():
         st.caption(f"Selected time: {int(chosen['start'])//60:02d}:{int(chosen['start'])%60:02d}–{int(chosen['end'])//60:02d}:{int(chosen['end'])%60:02d}")
         st.video(str(report["source"]),start_time=int(chosen["start"]))
         highlight_format=st.radio("Highlight download format",["9:16 vertical (Shorts)","16:9 landscape (YouTube)","Both formats"],horizontal=True,key="highlight_format")
-        if st.button("Export selected 30-second highlight"):
+        if st.button(f"Export selected {selected_duration}-second highlight"):
             with st.spinner("Rendering and verifying recommended clip..."):
                 try:
                     formats=(["9x16","16x9"] if highlight_format=="Both formats" else
                              ["16x9"] if highlight_format.startswith("16:9") else ["9x16"])
                     exports=[]
                     for fmt in formats:
-                        out=OUT/"highlights"/f"highlight_{rank+1:02d}_{int(chosen['start']):05d}s_{fmt}.mp4"
+                        out=OUT/"highlights"/f"highlight_{rank+1:02d}_{int(chosen['start']):05d}s_{selected_duration}s_{fmt}.mp4"
                         highlights.export_clip(report["source"],chosen["start"],out,
-                                               vertical=fmt=="9x16",landscape=fmt=="16x9")
+                                               vertical=fmt=="9x16",landscape=fmt=="16x9",seconds=selected_duration)
                         exports.append(str(out))
                     st.session_state["last_highlight_exports"]=exports
                     st.success(f"Saved {len(exports)} verified clip format(s).")
@@ -614,7 +616,7 @@ if report and report.get("recommendations") and Path(report["source"]).exists():
     st.caption("Generate both versions for every recommended moment. Successful files are organized into separate folders and ZIP downloads.")
     if st.button("Generate BOTH sets for all recommended clips",key="export_two_sets"):
         import hashlib
-        source_key=hashlib.sha256(str(Path(report["source"]).resolve()).encode()).hexdigest()[:10]
+        source_key=hashlib.sha256((str(Path(report["source"]).resolve())+"_"+str(report.get("clip_seconds",30))).encode()).hexdigest()[:10]
         batch_root=OUT/"highlight_sets"/source_key
         vertical_dir=batch_root/"vertical_9x16"
         horizontal_dir=batch_root/"horizontal_16x9"
@@ -627,11 +629,11 @@ if report and report.get("recommendations") and Path(report["source"]).exists():
         completed=0
         for index,moment in enumerate(report["recommendations"],1):
             for fmt,folder in (("vertical_9x16",vertical_dir),("horizontal_16x9",horizontal_dir)):
-                target=folder/f"clip_{index:02d}_{int(moment['start']):05d}s.mp4"
+                target=folder/f"clip_{index:02d}_{int(moment['start']):05d}s_{int(report.get('clip_seconds',30))}s.mp4"
                 try:
                     highlights.export_clip(report["source"],moment["start"],target,
                                            vertical=fmt=="vertical_9x16",
-                                           landscape=fmt=="horizontal_16x9")
+                                           landscape=fmt=="horizontal_16x9",seconds=int(report.get("clip_seconds",30)))
                     dimensions=rights_pipeline.video_dimensions(target)
                     expected=(480,854) if fmt=="vertical_9x16" else (1280,720)
                     if dimensions!=expected:
