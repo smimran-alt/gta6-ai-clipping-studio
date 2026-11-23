@@ -97,7 +97,7 @@ def rank_windows(duration, scenes, levels, count=5, clip_seconds=CLIP_SECONDS, s
         loudness=min(peak/.30,1) if energy else 0
         hook=min(1,.65*min(first_changes/2,1)+.35*min(hook_audio/.22,1))
         # Pacing proxy: distribute scene changes over thirds; not a retention prediction.
-        thirds=[sum(start+i*10<=t<start+(i+1)*10 for t in scenes) for i in range(3)]
+        thirds=[sum(start+i*(clip_seconds/3)<=t<start+(i+1)*(clip_seconds/3) for t in scenes) for i in range(3)]
         pacing=min(sum(1 for n in thirds if n>0)/3,1)
         evidence={
             "first_2_second_hook":hook,
@@ -133,13 +133,14 @@ def rank_windows(duration, scenes, levels, count=5, clip_seconds=CLIP_SECONDS, s
             if len(selected)>=count:break
     return selected
 
-def analyze(source, count=5):
+def analyze(source, count=5, clip_seconds=30):
     source=Path(source).resolve()
     if not source.is_file(): raise FileNotFoundError(source)
     duration=probe_duration(source)
     analyzed=min(duration,MAX_ANALYSIS_SECONDS)
-    if analyzed<CLIP_SECONDS:
-        raise ValueError("Source must be at least 30 seconds long for a 30-second recommendation.")
+    if clip_seconds not in (30,60):raise ValueError("Clip duration must be 30 or 60 seconds")
+    if analyzed<clip_seconds:
+        raise ValueError(f"Source must be at least {clip_seconds} seconds long.")
     scenes=detect_scene_changes(source,analyzed)
     try:
         levels=audio_energy(source,analyzed)
@@ -148,14 +149,15 @@ def analyze(source, count=5):
         # Silent sources still get scene-based suggestions.
         levels=[]
         audio_note="No readable audio; visual scene changes only"
-    results=rank_windows(analyzed,scenes,levels,count=count)
+    results=rank_windows(analyzed,scenes,levels,count=count,clip_seconds=clip_seconds)
     return {"source":str(source),"source_duration":duration,
-            "analyzed_seconds":analyzed,"clip_seconds":CLIP_SECONDS,
+            "analyzed_seconds":analyzed,"clip_seconds":clip_seconds,
             "method":"100-point user rubric; observable proxy estimates only; unassessed semantic criteria remain null",
             "limitations":"Score is normalized to assessable criteria only, NOT a verified 100-point viral score. Semantic criteria require further analysis and remain unassessed.",
             "audio_status":audio_note,"recommendations":results}
 
-def export_clip(source, start, destination, vertical=True, landscape=False):
+def export_clip(source, start, destination, vertical=True, landscape=False, seconds=30):
+    if seconds not in (30,60):raise ValueError("Export duration must be 30 or 60 seconds")
     source=Path(source).resolve()
     destination=Path(destination).resolve()
     destination.parent.mkdir(parents=True,exist_ok=True)
@@ -164,7 +166,7 @@ def export_clip(source, start, destination, vertical=True, landscape=False):
     filters=(["scale=1280:720:force_original_aspect_ratio=decrease","pad=1280:720:(ow-iw)/2:(oh-ih)/2"] if landscape else
              ["scale=480:854:force_original_aspect_ratio=increase","crop=480:854"] if vertical else [])
     args=["ffmpeg","-hide_banner","-loglevel","error","-nostdin","-y",
-          "-ss",str(start),"-i",str(source),"-t",str(CLIP_SECONDS),
+          "-ss",str(start),"-i",str(source),"-t",str(seconds),
           "-map","0:v:0","-map","0:a?"]
     if filters: args+=["-vf",",".join(filters)]
     args+=["-threads","2","-filter_threads","1","-c:v","libx264",
@@ -175,8 +177,8 @@ def export_clip(source, start, destination, vertical=True, landscape=False):
         if not temp.exists() or temp.stat().st_size<1024:
             raise RuntimeError("No usable MP4 was created")
         duration=probe_duration(temp)
-        if not 27<=duration<=31:
-            raise RuntimeError(f"Rendered clip is {duration:.1f}s, expected about 30s")
+        if abs(duration-seconds)>2:
+            raise RuntimeError(f"Rendered clip is {duration:.1f}s, expected about {seconds}s")
         temp.replace(destination)
         return destination
     finally:
