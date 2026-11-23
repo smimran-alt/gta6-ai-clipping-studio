@@ -184,7 +184,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.2"
+APP_VERSION="v1.9.3"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -574,22 +574,30 @@ if report and Path(report["source"]).exists():
                      hide_index=True,use_container_width=True)
         st.caption(f"Selected time: {int(chosen['start'])//60:02d}:{int(chosen['start'])%60:02d}–{int(chosen['end'])//60:02d}:{int(chosen['end'])%60:02d}")
         st.video(str(report["source"]),start_time=int(chosen["start"]))
-        make_vertical=st.checkbox("Export recommended highlight as vertical 9:16",value=True,key="highlight_vertical")
+        highlight_format=st.radio("Highlight download format",["9:16 vertical (Shorts)","16:9 landscape (YouTube)","Both formats"],horizontal=True,key="highlight_format")
         if st.button("Export selected 30-second highlight"):
             with st.spinner("Rendering and verifying recommended clip..."):
                 try:
-                    out=OUT/"highlights"/f"highlight_{rank+1:02d}_{int(chosen['start']):05d}s.mp4"
-                    highlights.export_clip(report["source"],chosen["start"],out,vertical=make_vertical)
-                    st.session_state["last_highlight_export"]=str(out)
-                    st.success(f"Saved verified clip: {out}")
+                    formats=(["9x16","16x9"] if highlight_format=="Both formats" else
+                             ["16x9"] if highlight_format.startswith("16:9") else ["9x16"])
+                    exports=[]
+                    for fmt in formats:
+                        out=OUT/"highlights"/f"highlight_{rank+1:02d}_{int(chosen['start']):05d}s_{fmt}.mp4"
+                        highlights.export_clip(report["source"],chosen["start"],out,
+                                               vertical=fmt=="9x16",landscape=fmt=="16x9")
+                        exports.append(str(out))
+                    st.session_state["last_highlight_exports"]=exports
+                    st.success(f"Saved {len(exports)} verified clip format(s).")
                 except Exception as exc:
                     st.error(f"Highlight export failed: {exc}")
-last_export=st.session_state.get("last_highlight_export")
-if last_export and Path(last_export).exists():
-    st.video(last_export)
-    with open(last_export,"rb") as file:
-        st.download_button("Download recommended 30-second MP4",data=file,
-                           file_name=Path(last_export).name,mime="video/mp4")
+for last_export in st.session_state.get("last_highlight_exports",[]):
+    if Path(last_export).exists():
+        st.write(f"**{Path(last_export).name}**")
+        st.video(last_export)
+        with open(last_export,"rb") as file:
+            st.download_button(f"Download {Path(last_export).name}",data=file,
+                               file_name=Path(last_export).name,mime="video/mp4",
+                               key="highlight_download_"+Path(last_export).name)
 
 st.divider()
 st.subheader("7. Captions, AI commentary and Shorts editor")
@@ -708,7 +716,8 @@ else:
     voice=st.checkbox("Speak the commentary using local text-to-speech (pyttsx3 required)",value=False,key="rights_voice")
     captions=st.checkbox("Automatically transcribe spoken audio into subtitles (faster-whisper required)",value=False,key="rights_captions")
     fade=st.checkbox("Add subtle fade-in/fade-out transitions",value=True,key="rights_fade")
-    vertical=st.checkbox("Export vertical 9:16",value=True,key="rights_vertical")
+    production_format=st.radio("Video export format",["9:16 vertical (Shorts)","16:9 landscape (YouTube)","Both formats"],horizontal=True,key="rights_export_format")
+    st.caption("9:16 keeps the existing vertical crop. 16:9 produces a 1280×720 landscape video, padded when needed. Both creates two files per successful clip.")
     allow=st.checkbox("I have rights to edit and publish the selected video footage",key="rights_video_confirmation")
     if st.button("Produce all available 30-second Shorts",type="primary",disabled=not allow,key="rights_produce"):
         if music and not music_rights:
@@ -743,10 +752,16 @@ else:
                         entry["commentary_script"]=str(script_path)
                         if voice:
                             voice_path=editor.synthesize(script,folder/f"narration_{i:02d}.wav")
-                    output=folder/f"short_{i:02d}.mp4"
-                    rights_pipeline.render(source,output,look=look,licensed_music=music_path,
-                                           voice=voice_path,srt=subtitle_path,fade=fade,vertical=vertical)
-                    entry.update({"status":"saved","file":str(output)})
+                    formats=(["9x16","16x9"] if production_format=="Both formats" else
+                             ["16x9"] if production_format.startswith("16:9") else ["9x16"])
+                    outputs=[]
+                    for fmt in formats:
+                        output=folder/f"short_{i:02d}_{fmt}.mp4"
+                        rights_pipeline.render(source,output,look=look,licensed_music=music_path,
+                                               voice=voice_path,srt=subtitle_path,fade=fade,
+                                               vertical=fmt=="9x16",landscape=fmt=="16x9")
+                        outputs.append(str(output))
+                    entry.update({"status":"saved","file":outputs[0],"files":outputs})
                 except Exception as exc:
                     entry.update({"status":"failed","error":str(exc)[:350]})
                 produced.append(entry)
@@ -757,7 +772,8 @@ else:
                 bundle=folder/"produced_shorts.zip"
                 with zipfile.ZipFile(bundle,"w",compression=zipfile.ZIP_DEFLATED) as archive:
                     for item in successes:
-                        archive.write(item["file"],arcname=Path(item["file"]).name)
+                        for rendered in item.get("files",[item["file"]]):
+                            archive.write(rendered,arcname=Path(rendered).name)
                         if item.get("commentary_script"):
                             archive.write(item["commentary_script"],arcname=Path(item["commentary_script"]).name)
                     archive.writestr("production_report.json",json.dumps(produced,indent=2))
