@@ -107,7 +107,7 @@ def _escaped(path):
     return str(Path(path).resolve()).replace("\\","/").replace(":","\\:").replace("'","\\'").replace(",","\\,")
 
 def render(source,destination,look="Natural",licensed_music=None,voice=None,
-           srt=None,fade=True,vertical=True):
+           srt=None,fade=True,vertical=True,landscape=False):
     """Replace source audio by default. Optional licensed track and voice mix."""
     source=Path(source).resolve()
     destination=Path(destination).resolve()
@@ -129,7 +129,10 @@ def render(source,destination,look="Natural",licensed_music=None,voice=None,
             args+=["-stream_loop","-1","-i",str(item)]
             audio_inputs.append(len(audio_inputs)+1)
     vf=[]
-    if vertical:vf+=["scale=480:854:force_original_aspect_ratio=increase","crop=480:854"]
+    if landscape:
+        vf+=["scale=1280:720:force_original_aspect_ratio=decrease","pad=1280:720:(ow-iw)/2:(oh-ih)/2"]
+    elif vertical:
+        vf+=["scale=480:854:force_original_aspect_ratio=increase","crop=480:854"]
     vf.append(LOOKS[look])
     if srt:vf.append("subtitles='"+_escaped(srt)+"'")
     if fade:vf+=["fade=t=in:st=0:d=0.35",f"fade=t=out:st={max(0,seconds-.35):.2f}:d=0.35"]
