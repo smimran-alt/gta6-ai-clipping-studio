@@ -40,7 +40,7 @@ def _frame(source,second):
         raise RuntimeError(result.stderr.decode("utf-8","replace")[-400:])
     return Image.open(io.BytesIO(result.stdout)).convert("RGB")
 
-def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch32",progress=None,sensational_weight=0.60):
+def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch32",progress=None,sensational_weight=0.60,clip_seconds=30):
     try:
         import torch
         from transformers import CLIPModel, CLIPProcessor
@@ -60,7 +60,7 @@ def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch3
     results=[]
     for i,item in enumerate(candidates):
         frames=[]
-        for offset in (0.5,2,5,9,13,17,21,25,28):
+        for offset in [clip_seconds*f for f in (0.02,0.07,0.17,0.30,0.43,0.57,0.70,0.83,0.95)]:
             try:frames.append(_frame(source,float(item["start"])+offset))
             except (RuntimeError,subprocess.TimeoutExpired):pass
         if not frames:
@@ -95,6 +95,6 @@ def analyze_candidates(source,candidates,model_name="openai/clip-vit-base-patch3
     results.sort(key=lambda x: (-(x["ai_score"] if x["ai_score"] is not None else -1),x["start"]))
     selected=[]
     for item in results:
-        if all(abs(item["start"]-other["start"])>=30 for other in selected):
+        if all(abs(item["start"]-other["start"])>=clip_seconds for other in selected):
             selected.append(item)
     return selected
