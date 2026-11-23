@@ -602,19 +602,29 @@ if report and Path(report["source"]).exists():
                     formats=(["9x16","16x9"] if highlight_format=="Both formats" else
                              ["16x9"] if highlight_format.startswith("16:9") else ["9x16"])
                     exports=[]
+                    errors=[]
                     for fmt in formats:
                         out=OUT/"highlights"/f"highlight_{rank+1:02d}_{int(chosen['start']):05d}s_{selected_duration}s_{fmt}.mp4"
-                        highlights.export_clip(report["source"],chosen["start"],out,
-                                               vertical=fmt=="9x16",landscape=fmt=="16x9",seconds=selected_duration)
-                        exports.append(str(out))
+                        try:
+                            highlights.export_clip(report["source"],chosen["start"],out,
+                                                   vertical=fmt=="9x16",landscape=fmt=="16x9",seconds=selected_duration)
+                            dimensions=rights_pipeline.video_dimensions(out)
+                            expected=(480,854) if fmt=="9x16" else (1280,720)
+                            if dimensions!=expected:
+                                raise RuntimeError(f"Unexpected output dimensions {dimensions}")
+                            exports.append(str(out))
+                        except Exception as fmt_exc:
+                            errors.append(f"{fmt}: {fmt_exc}")
                     st.session_state["last_highlight_exports"]=exports
-                    st.success(f"Saved {len(exports)} verified clip format(s).")
+                    if exports:st.success(f"Saved {len(exports)} verified clip format(s).")
+                    for error in errors:st.error(error)
                 except Exception as exc:
                     st.error(f"Highlight export failed: {exc}")
 if report and report.get("recommendations") and Path(report["source"]).exists():
     st.subheader("Download two separate sets — Vertical and Horizontal")
-    st.caption("Generate both versions for every recommended moment. Successful files are organized into separate folders and ZIP downloads.")
+    st.caption("This uses the Section 6 source video, NOT the 30-second segments from Section 3. Exports are separated into vertical and horizontal ZIP downloads.")
     if st.button("Generate BOTH sets for all recommended clips",key="export_two_sets"):
+        st.session_state.pop("two_sets_results",None)
         import hashlib
         source_key=hashlib.sha256((str(Path(report["source"]).resolve())+"_"+str(report.get("clip_seconds",30))).encode()).hexdigest()[:10]
         batch_root=OUT/"highlight_sets"/source_key
