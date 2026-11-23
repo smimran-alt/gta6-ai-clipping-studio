@@ -184,7 +184,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.3"
+APP_VERSION="v1.9.4"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -755,15 +755,25 @@ else:
                     formats=(["9x16","16x9"] if production_format=="Both formats" else
                              ["16x9"] if production_format.startswith("16:9") else ["9x16"])
                     outputs=[]
+                    failures={}
                     for fmt in formats:
                         output=folder/f"short_{i:02d}_{fmt}.mp4"
-                        rights_pipeline.render(source,output,look=look,licensed_music=music_path,
-                                               voice=voice_path,srt=subtitle_path,fade=fade,
-                                               vertical=fmt=="9x16",landscape=fmt=="16x9")
-                        outputs.append(str(output))
-                    entry.update({"status":"saved","file":outputs[0],"files":outputs})
+                        try:
+                            rights_pipeline.render(source,output,look=look,licensed_music=music_path,
+                                                   voice=voice_path,srt=subtitle_path,fade=fade,
+                                                   vertical=fmt=="9x16",landscape=fmt=="16x9")
+                            dimensions=rights_pipeline.video_dimensions(output)
+                            expected=(480,854) if fmt=="9x16" else (1280,720)
+                            if dimensions!=expected:
+                                raise RuntimeError(f"Unexpected dimensions: {dimensions}, expected {expected}")
+                            outputs.append(str(output))
+                        except Exception as format_error:
+                            failures[fmt]=str(format_error)[:350]
+                    entry.update({"status":"saved" if outputs else "failed",
+                                  "file":outputs[0] if outputs else "",
+                                  "files":outputs,"format_errors":failures})
                 except Exception as exc:
-                    entry.update({"status":"failed","error":str(exc)[:350]})
+                    entry.update({"status":"failed","files":[],"error":str(exc)[:350]})
                 produced.append(entry)
             bar.progress(1.0,text="Production complete")
             st.session_state["produced_short_results"]=produced
@@ -780,9 +790,19 @@ else:
                 st.session_state["produced_short_zip"]=str(bundle)
                 st.success(f"Produced {len(successes)} separate MP4 files out of {len(batch_files)} available sources.")
             if len(successes)!=len(batch_files):st.warning("Some exports failed; see the detailed results below.")
+    st.caption("Download each successfully rendered aspect ratio individually below. Any failed formats are shown in the results table.")
     produced=st.session_state.get("produced_short_results",[])
     if produced:
         st.dataframe(produced,hide_index=True,use_container_width=True)
+        for item in produced:
+            for rendered in item.get("files",[]):
+                path=Path(rendered)
+                if path.is_file():
+                    st.write(f"Clip {item['clip']} — {'Vertical 9:16' if '_9x16' in path.stem else 'Landscape 16:9'}")
+                    with open(path,"rb") as video_file:
+                        st.download_button(f"Download {path.name}",data=video_file,
+                                           file_name=path.name,mime="video/mp4",
+                                           key="produced_download_"+path.name)
         bundle=st.session_state.get("produced_short_zip")
         if bundle and Path(bundle).is_file():
             with open(bundle,"rb") as file:
