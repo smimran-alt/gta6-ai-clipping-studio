@@ -155,13 +155,14 @@ def analyze(source, count=5):
             "limitations":"Score is normalized to assessable criteria only, NOT a verified 100-point viral score. Semantic criteria require further analysis and remain unassessed.",
             "audio_status":audio_note,"recommendations":results}
 
-def export_clip(source, start, destination, vertical=True):
+def export_clip(source, start, destination, vertical=True, landscape=False):
     source=Path(source).resolve()
     destination=Path(destination).resolve()
     destination.parent.mkdir(parents=True,exist_ok=True)
     temp=destination.with_name(destination.stem+".pending.mp4")
     if temp.exists(): temp.unlink()
-    filters=["scale=480:854:force_original_aspect_ratio=increase","crop=480:854"] if vertical else []
+    filters=(["scale=1280:720:force_original_aspect_ratio=decrease","pad=1280:720:(ow-iw)/2:(oh-ih)/2"] if landscape else
+             ["scale=480:854:force_original_aspect_ratio=increase","crop=480:854"] if vertical else [])
     args=["ffmpeg","-hide_banner","-loglevel","error","-nostdin","-y",
           "-ss",str(start),"-i",str(source),"-t",str(CLIP_SECONDS),
           "-map","0:v:0","-map","0:a?"]
