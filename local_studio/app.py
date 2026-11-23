@@ -20,6 +20,7 @@ import streamlit as st
 import yt_dlp
 import discovery
 import highlights
+import chase_ai
 import editor
 import engagement
 import comment_download
@@ -184,7 +185,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.4"
+APP_VERSION="v1.9.5"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -535,10 +536,22 @@ if available_sources:
     selected_source=st.selectbox("Choose saved source for highlight analysis",available_sources,
                                  format_func=lambda path:f"{path.name} ({path.stat().st_size/1024/1024:.1f} MB)")
     suggestions=st.slider("Number of recommended highlights",1,10,5,key="highlight_count")
+    mode=st.radio("Highlight selection mode",["General viral moments (existing)","Car chases & sensational moments (AI)"],
+                  key="highlight_selection_mode")
+    if mode.endswith("(AI)"):
+        st.info("Optional local CLIP vision model. First use downloads model weights (~600 MB) and requires additional packages. Visual similarity is not proof of a chase, crash or explosion. Review each result.")
+        st.caption("Analyzes 5 frames per candidate, sampled from the highest-motion/audio 30-second windows. Maximum 20 minutes of source footage.")
     if st.button("Analyze video and recommend 30-second highlights",type="primary"):
-        with st.spinner("Analyzing local scene changes and audio; long videos may take several minutes..."):
+        with st.spinner("Analyzing local video; AI mode may take several minutes..."):
             try:
-                report=highlights.analyze(selected_source,count=suggestions)
+                use_ai=mode.endswith("(AI)")
+                report=highlights.analyze(selected_source,count=max(12,suggestions) if use_ai else suggestions)
+                if use_ai:
+                    ranked=chase_ai.analyze_candidates(selected_source,report["recommendations"])
+                    report["recommendations"]=ranked[:suggestions]
+                    report["method"]="Optional CLIP visual semantic similarity + hook/pacing/audio proxies"
+                    report["limitations"]="Vision similarity is not verified event recognition. Only sampled candidate windows are considered."
+                    report["selection_mode"]="chase_ai"
                 st.session_state["highlight_report"]=report
                 st.success(f"Analyzed {report['analyzed_seconds']:.0f} seconds. Found {len(report['recommendations'])} recommendations.")
             except Exception as exc:
@@ -548,13 +561,17 @@ else:
 report=st.session_state.get("highlight_report")
 if report and Path(report["source"]).exists():
     st.caption(f"Source: {Path(report['source']).name} | Method: {report['method']} | {report['audio_status']}")
-    st.caption("The displayed score is normalized to criteria that can be estimated from available signals, NOT a verified viral score out of 100. The coverage column shows how many of the 100 rubric points were assessed.")
+    st.caption("General mode scores use assessable proxies only. AI mode uses CLIP image-text similarity, not a verified event detector or probability. The original 12-criterion rubric remains available for comparison.")
     recs=report["recommendations"]
     if recs:
         st.dataframe([{"rank":i+1,"start_seconds":item["start"],"end_seconds":item["end"],
                        "proxy_score_percent":item["score"],"rubric_coverage_points":item["observed_max_points"],
                        "observed_points":item["observed_points"],"scene_changes":item["scene_changes"],
-                       "audio_level":item["average_audio"]} for i,item in enumerate(recs)],
+                       "audio_level":item["average_audio"],
+                       "chase_visual_score":item.get("chase_score"),
+                       "sensational_visual_score":item.get("sensational_score"),
+                       "ai_combined_score":item.get("ai_score"),
+                       "selection_reason":item.get("ai_reason","Motion, pacing and audio proxies")} for i,item in enumerate(recs)],
                      use_container_width=True,hide_index=True)
         with st.expander("How the 12-criterion scoring works"):
             st.dataframe([{"criterion":key.replace("_"," ").title(),
