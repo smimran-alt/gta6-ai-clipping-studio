@@ -185,7 +185,7 @@ def process(source, title, minutes, narration, vertical, clip_seconds=60):
     (folder/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return files
 
-APP_VERSION="v1.9.5"
+APP_VERSION="v1.9.6"
 st.set_page_config(page_title=f"GTA 6 AI Clipping Studio {APP_VERSION} - Local",page_icon="🎬",layout="wide")
 st.title(f"🎬 GTA 6 Clipping Studio {APP_VERSION} — Local")
 st.caption("Search GTA 6 automatically, rank by comments, identify timestamped discussions and download authorized 30-second moments.")
@@ -539,19 +539,21 @@ if available_sources:
     mode=st.radio("Highlight selection mode",["General viral moments (existing)","Car chases & sensational moments (AI)"],
                   key="highlight_selection_mode")
     if mode.endswith("(AI)"):
+        sensational_weight=st.slider("Sensational moments emphasis (%)",min_value=40,max_value=90,value=70,step=5,key="sensational_emphasis")
         st.info("Optional local CLIP vision model. First use downloads model weights (~600 MB) and requires additional packages. Visual similarity is not proof of a chase, crash or explosion. Review each result.")
         st.caption("Analyzes 5 frames per candidate, sampled from the highest-motion/audio 30-second windows. Maximum 20 minutes of source footage.")
     if st.button("Analyze video and recommend 30-second highlights",type="primary"):
         with st.spinner("Analyzing local video; AI mode may take several minutes..."):
             try:
                 use_ai=mode.endswith("(AI)")
-                report=highlights.analyze(selected_source,count=max(12,suggestions) if use_ai else suggestions)
+                report=highlights.analyze(selected_source,count=max(20,suggestions) if use_ai else suggestions)
                 if use_ai:
-                    ranked=chase_ai.analyze_candidates(selected_source,report["recommendations"])
+                    ranked=chase_ai.analyze_candidates(selected_source,report["recommendations"],sensational_weight=sensational_weight/100)
                     report["recommendations"]=ranked[:suggestions]
                     report["method"]="Optional CLIP visual semantic similarity + hook/pacing/audio proxies"
                     report["limitations"]="Vision similarity is not verified event recognition. Only sampled candidate windows are considered."
                     report["selection_mode"]="chase_ai"
+                    report["sensational_emphasis"]=sensational_weight
                 st.session_state["highlight_report"]=report
                 st.success(f"Analyzed {report['analyzed_seconds']:.0f} seconds. Found {len(report['recommendations'])} recommendations.")
             except Exception as exc:
@@ -607,6 +609,66 @@ if report and Path(report["source"]).exists():
                     st.success(f"Saved {len(exports)} verified clip format(s).")
                 except Exception as exc:
                     st.error(f"Highlight export failed: {exc}")
+if report and report.get("recommendations") and Path(report["source"]).exists():
+    st.subheader("Download two separate sets — Vertical and Horizontal")
+    st.caption("Generate both versions for every recommended moment. Successful files are organized into separate folders and ZIP downloads.")
+    if st.button("Generate BOTH sets for all recommended clips",key="export_two_sets"):
+        import hashlib
+        source_key=hashlib.sha256(str(Path(report["source"]).resolve()).encode()).hexdigest()[:10]
+        batch_root=OUT/"highlight_sets"/source_key
+        vertical_dir=batch_root/"vertical_9x16"
+        horizontal_dir=batch_root/"horizontal_16x9"
+        vertical_dir.mkdir(parents=True,exist_ok=True)
+        horizontal_dir.mkdir(parents=True,exist_ok=True)
+        output_files={"vertical_9x16":[],"horizontal_16x9":[]}
+        failures=[]
+        progress=st.progress(0)
+        jobs=len(report["recommendations"])*2
+        completed=0
+        for index,moment in enumerate(report["recommendations"],1):
+            for fmt,folder in (("vertical_9x16",vertical_dir),("horizontal_16x9",horizontal_dir)):
+                target=folder/f"clip_{index:02d}_{int(moment['start']):05d}s.mp4"
+                try:
+                    highlights.export_clip(report["source"],moment["start"],target,
+                                           vertical=fmt=="vertical_9x16",
+                                           landscape=fmt=="horizontal_16x9")
+                    dimensions=rights_pipeline.video_dimensions(target)
+                    expected=(480,854) if fmt=="vertical_9x16" else (1280,720)
+                    if dimensions!=expected:
+                        raise RuntimeError(f"Wrong video dimensions: {dimensions}")
+                    output_files[fmt].append(str(target))
+                except Exception as exc:
+                    failures.append({"clip":index,"format":fmt,"error":str(exc)[:400]})
+                completed+=1
+                progress.progress(completed/jobs)
+        zips={}
+        for fmt,paths in output_files.items():
+            if paths:
+                zip_path=batch_root/f"{fmt}.zip"
+                with zipfile.ZipFile(zip_path,"w",compression=zipfile.ZIP_DEFLATED) as archive:
+                    for path in paths:archive.write(path,arcname=Path(path).name)
+                zips[fmt]=str(zip_path)
+        st.session_state["two_sets_results"]={"source":str(report["source"]),"zips":zips,
+                                              "files":output_files,"failures":failures}
+        st.success(f"Rendered {len(output_files['vertical_9x16'])} vertical and {len(output_files['horizontal_16x9'])} horizontal clips.")
+    sets=st.session_state.get("two_sets_results",{})
+    if sets and sets.get("source")==str(report["source"]):
+        for fmt,label in (("vertical_9x16","Vertical 9:16 ZIP"),("horizontal_16x9","Horizontal 16:9 ZIP")):
+            zip_path=sets.get("zips",{}).get(fmt)
+            if zip_path and Path(zip_path).is_file():
+                with open(zip_path,"rb") as bundle:
+                    st.download_button(f"Download {label}",data=bundle,file_name=Path(zip_path).name,
+                                       mime="application/zip",key="zip_"+fmt)
+            for file_path in sets.get("files",{}).get(fmt,[]):
+                if Path(file_path).is_file():
+                    with open(file_path,"rb") as video:
+                        st.download_button(f"Download {fmt}: {Path(file_path).name}",data=video,
+                                           file_name=f"{fmt}_{Path(file_path).name}",mime="video/mp4",
+                                           key="two_sets_"+fmt+Path(file_path).name)
+        if sets.get("failures"):
+            st.warning("Some renders failed; successful files remain downloadable.")
+            st.dataframe(sets["failures"],hide_index=True,use_container_width=True)
+
 for last_export in st.session_state.get("last_highlight_exports",[]):
     if Path(last_export).exists():
         st.write(f"**{Path(last_export).name}**")
